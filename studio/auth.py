@@ -127,7 +127,10 @@ def verify_password(password: str, stored: str) -> bool:
 
 def _pg_dsn(url: str) -> str:
     if url.startswith("postgres://"):
-        return "postgresql://" + url[len("postgres://"):]
+        url = "postgresql://" + url[len("postgres://"):]
+    # Neon (and most hosted Postgres) require TLS.
+    if "sslmode=" not in url.lower():
+        url += ("&" if "?" in url else "?") + "sslmode=require"
     return url
 
 
@@ -344,7 +347,7 @@ def save_keys(user_id: int, updates: dict) -> dict:
         if raw is None:
             current[name] = ""
             continue
-        text = str(raw).strip()
+        text = str(raw).strip().strip('"').strip("'")
         if text:
             current[name] = text
     with _lock:
@@ -370,10 +373,16 @@ def save_keys(user_id: int, updates: dict) -> dict:
 
 
 def apply_user_keys(user_id: int) -> dict:
-    """Return env overrides for this user. Empty string clears a process env key."""
+    """Env overrides for this account. Omit blank fields so .env still applies."""
     keys = get_keys(user_id)
-    return {
-        "PEXELS_API_KEY": keys.get("pexels") or "",
-        "POLLINATIONS_API_KEY": keys.get("pollinations") or "",
-        "EPIDEMIC_API_KEY": keys.get("epidemic") or "",
-    }
+    out = {}
+    mapping = (
+        ("PEXELS_API_KEY", "pexels"),
+        ("POLLINATIONS_API_KEY", "pollinations"),
+        ("EPIDEMIC_API_KEY", "epidemic"),
+    )
+    for env_name, field in mapping:
+        val = (keys.get(field) or "").strip().strip('"').strip("'")
+        if val:
+            out[env_name] = val
+    return out

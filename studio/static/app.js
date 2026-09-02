@@ -89,8 +89,8 @@ function setFrame(size) {
   frame.style.aspectRatio = `${w} / ${h}`;
   const box = monitor.getBoundingClientRect();
   const pad = 36;
-  const maxW = Math.max(140, box.width - pad);
-  const maxH = Math.max(180, box.height - pad);
+  const maxW = Math.min(280, Math.max(140, box.width - pad));
+  const maxH = Math.min(520, Math.max(180, box.height - pad));
   let width = maxW;
   let height = width * (h / w);
   if (height > maxH) {
@@ -212,16 +212,26 @@ function renderOptions(data) {
 
   const lengths = $("lengths");
   lengths.innerHTML = "";
+  const chips = {
+    youtube: { lines: ["YouTube", "Shorts"], hint: "3 min max" },
+    tiktok: { lines: ["TikTok"], hint: "10 min" },
+    instagram: { lines: ["IG Reels"], hint: "20 min" },
+    facebook: { lines: ["FB Reels"], hint: "No cap" },
+    custom: { lines: ["Custom"], hint: "Seconds" },
+  };
   (data.lengths || []).forEach((item) => {
+    const chip = chips[item.id] || { lines: [item.label], hint: item.hint };
     const b = document.createElement("button");
     b.type = "button";
     b.className = "length" + (item.id === state.length ? " is-on" : "");
     b.dataset.id = item.id;
-    const strong = document.createElement("strong");
-    strong.textContent = item.label;
+    (chip.lines || [chip.label || item.label]).forEach((line) => {
+      const strong = document.createElement("strong");
+      strong.textContent = line;
+      b.appendChild(strong);
+    });
     const hint = document.createElement("span");
-    hint.textContent = item.hint;
-    b.appendChild(strong);
+    hint.textContent = chip.hint || item.hint || "";
     b.appendChild(hint);
     b.addEventListener("click", () => pickLength(item));
     lengths.appendChild(b);
@@ -347,7 +357,7 @@ function openEpidemic() {
   $("epidemic").hidden = false;
   $("epidemicQuery").focus();
   if (!epidemicEnabled()) {
-    $("epidemicStatus").textContent = "Add EPIDEMIC_API_KEY to .env and restart studio.";
+    $("epidemicStatus").textContent = "Add an Epidemic Sound key in Settings, or put EPIDEMIC_API_KEY in .env and restart studio.";
     $("epidemicList").innerHTML = "";
     return;
   }
@@ -378,7 +388,7 @@ async function loadEpidemic() {
   const req = ++state.epidemicReq;
   const kind = state.epidemicKind;
   if (!epidemicEnabled()) {
-    status.textContent = "Add EPIDEMIC_API_KEY to .env and restart studio.";
+    status.textContent = "Add an Epidemic Sound key in Settings, or put EPIDEMIC_API_KEY in .env and restart studio.";
     list.innerHTML = "";
     return;
   }
@@ -536,8 +546,10 @@ async function generate() {
   onSecondsInput();
   stopPreview();
   $("generate").disabled = true;
-  $("log").hidden = false;
-  $("log").textContent = "Queued…\n";
+  $("log").hidden = true;
+  $("log").textContent = "";
+  $("jobMeta").classList.remove("bad");
+  $("jobMeta").textContent = "Queued…";
   pill("rendering", true);
   const res = await api("/api/generate", {
     method: "POST",
@@ -556,12 +568,14 @@ async function generate() {
     const body = await res.json().catch(() => ({}));
     const detail = typeof body.detail === "string" ? body.detail : (body.detail && JSON.stringify(body.detail));
   if (!res.ok) {
+    $("jobMeta").classList.add("bad");
     $("jobMeta").textContent = detail || "Could not start render.";
     $("generate").disabled = false;
     pill("idle", false);
     return;
   }
   state.jobId = body.id;
+  $("jobMeta").classList.remove("bad");
   $("jobMeta").textContent = `Job ${body.id} · ${body.model} · ${body.size} · ${body.seconds || "full"}s`;
   if (state.poll) clearInterval(state.poll);
   state.poll = setInterval(tickJob, 2000);
@@ -571,19 +585,30 @@ async function generate() {
 async function tickJob() {
   if (!state.jobId) return;
   const job = await (await api("/api/jobs/" + state.jobId)).json();
-  $("log").textContent = job.log || "Working…";
-  $("log").scrollTop = $("log").scrollHeight;
+  const log = (job.log || "").trim();
+  if (log) {
+    $("log").hidden = false;
+    $("log").textContent = log;
+    $("log").scrollTop = $("log").scrollHeight;
+  } else if (job.status === "running" || job.status === "queued") {
+    $("log").hidden = false;
+    $("log").textContent = "Working…";
+  }
   if (job.status === "done" && job.video) {
     clearInterval(state.poll);
+    $("jobMeta").classList.remove("bad");
     showVideo(job.video, job.title || job.stem);
     $("generate").disabled = false;
     pill("idle", false);
+    $("log").hidden = true;
     loadOptions();
   } else if (job.status === "error") {
     clearInterval(state.poll);
+    $("jobMeta").classList.add("bad");
     $("jobMeta").textContent = job.error || "Render failed";
     $("generate").disabled = false;
     pill("idle", false);
+    if (!log) $("log").hidden = true;
   }
 }
 

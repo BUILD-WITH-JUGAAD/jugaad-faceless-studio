@@ -106,7 +106,12 @@ def _page(name: str) -> FileResponse:
 @contextmanager
 def _epidemic_for(user_id: int):
     keys = auth.apply_user_keys(user_id)
-    with epidemic_api_key(keys.get("EPIDEMIC_API_KEY") or ""):
+    user_key = (keys.get("EPIDEMIC_API_KEY") or "").strip()
+    # Blank account key must not hide EPIDEMIC_API_KEY from .env.
+    if user_key:
+        with epidemic_api_key(user_key):
+            yield
+    else:
         yield
 
 
@@ -233,7 +238,12 @@ def _options(user_id: int) -> dict:
         ] + tracks,
         "library": library[:24],
         "busy": _current is not None,
-        "epidemic": {"enabled": bool((keys.get("epidemic") or "").strip())},
+        "epidemic": {
+            "enabled": bool(
+                (keys.get("epidemic") or "").strip()
+                or (getattr(config, "EPIDEMIC_API_KEY", "") or "").strip()
+            )
+        },
         "keys": auth.keys_public(user_id),
         "generate": {
             "enabled": auth.generate_enabled(),
@@ -418,6 +428,25 @@ def _write_script(job: dict) -> Path:
     return path
 
 
+def _pipeline_python() -> str:
+    """Prefer the venv CLI interpreter.
+
+    Apple's Python.app (what Cursor often launches) has a 64KB main-thread
+    stack. OpenBLAS then SIGSEGVs in gemm_thread_n and macOS shows
+    "Python quit unexpectedly".
+    """
+    venv = ROOT / "venv" / "bin" / "python3"
+    if venv.exists():
+        return str(venv)
+    exe = Path(sys.executable)
+    if "Python.app" in exe.parts:
+        for parent in exe.parents:
+            cli = parent / "bin" / "python3"
+            if cli.exists() and "Python.app" not in cli.parts:
+                return str(cli)
+    return sys.executable
+
+
 def _run_job(job_id: str) -> None:
     global _current
     job = _read_job(job_id)
@@ -425,7 +454,7 @@ def _run_job(job_id: str) -> None:
     _write_job(job)
     script = _write_script(job)
     cmd = [
-        sys.executable, "-u", str(ROOT / "main.py"),
+        _pipeline_python(), "-u", str(ROOT / "main.py"),
         str(script),
         job["stem"],
         "model={0}".format(job["model"]),
@@ -434,7 +463,16 @@ def _run_job(job_id: str) -> None:
         "max={0}".format(job.get("seconds") if job.get("seconds") is not None else 180),
     ]
     log_chunks = []
-    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    env["OPENBLAS_NUM_THREADS"] = "1"
+    env["OMP_NUM_THREADS"] = "1"
+    env["MKL_NUM_THREADS"] = "1"
+    env["VECLIB_MAXIMUM_THREADS"] = "1"
+    env["NUMEXPR_NUM_THREADS"] = "1"
+    env["TOKENIZERS_PARALLELISM"] = "false"
+    if sys.platform == "darwin":
+        env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
     user_id = job.get("user_id")
     if user_id:
         env.update(auth.apply_user_keys(int(user_id)))
@@ -445,6 +483,7 @@ def _run_job(job_id: str) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             env=env,
+            start_new_session=True,
         )
         for raw in iter(proc.stdout.readline, b""):
             line = raw.decode("utf-8", errors="replace")
@@ -462,7 +501,15 @@ def _run_job(job_id: str) -> None:
             job["video"] = "/media/output/{0}.mp4".format(job["stem"])
         else:
             job["status"] = "error"
-            job["error"] = "Render failed (exit {0}). Check the log.".format(code)
+            if code in (-11, 139):
+                job["error"] = (
+                    "Render crashed while loading TTS/video libraries. "
+                    "Click Generate again. If it keeps failing, run it in Terminal from this folder."
+                )
+            else:
+                job["error"] = "Render failed (exit {0}). Check the log.".format(code)
+            if not job.get("log"):
+                job["log"] = "Process died before printing a log (exit {0}).\n".format(code)
         _write_job(job)
     except Exception as exc:
         job = _read_job(job_id)

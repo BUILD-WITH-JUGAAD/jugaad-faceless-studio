@@ -2,6 +2,18 @@
 
 import os
 
+# Pin BLAS before any numpy-using import. Apple's Python.app gives a
+# 64KB stack and OpenBLAS SIGSEGVs (exit -11) if it spawns gemm threads.
+for _k, _v in (
+    ("OPENBLAS_NUM_THREADS", "1"),
+    ("OMP_NUM_THREADS", "1"),
+    ("MKL_NUM_THREADS", "1"),
+    ("VECLIB_MAXIMUM_THREADS", "1"),
+    ("NUMEXPR_NUM_THREADS", "1"),
+    ("TOKENIZERS_PARALLELISM", "false"),
+):
+    os.environ[_k] = _v
+
 from studio.app import app
 
 

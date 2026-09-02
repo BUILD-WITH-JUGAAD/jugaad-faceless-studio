@@ -86,7 +86,10 @@ def _get(path: str, params=None) -> dict:
     try:
         resp = requests.get(url, headers=_headers(), params=params, timeout=25)
     except requests.RequestException as exc:
-        raise EpidemicError("Epidemic Sound is unreachable") from exc
+        raise EpidemicError(
+            "Epidemic Sound is unreachable ({0})".format(type(exc).__name__),
+            502,
+        ) from exc
     if resp.status_code == 401:
         raise EpidemicError("Epidemic Sound rejected the API key", 401)
     if resp.status_code == 403:
@@ -98,7 +101,7 @@ def _get(path: str, params=None) -> dict:
     if resp.status_code >= 400:
         raise EpidemicError(
             "Epidemic Sound request failed ({0})".format(resp.status_code),
-            502,
+            502 if resp.status_code >= 500 else resp.status_code,
         )
     if not resp.content:
         return {}
@@ -114,7 +117,10 @@ def _get_optional(path: str, params=None):
     try:
         resp = requests.get(url, headers=_headers(), params=params, timeout=25)
     except requests.RequestException as exc:
-        raise EpidemicError("Epidemic Sound is unreachable") from exc
+        raise EpidemicError(
+            "Epidemic Sound is unreachable ({0})".format(type(exc).__name__),
+            502,
+        ) from exc
     if resp.status_code in (400, 404):
         return None
     if resp.status_code == 401:

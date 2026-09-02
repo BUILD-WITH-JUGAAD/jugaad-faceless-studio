@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 output/
 jobs/
+scripts/studio/
 assets/audio/
 assets/broll/
 assets/stills/

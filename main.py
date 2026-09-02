@@ -15,19 +15,41 @@ Usage:
     python main.py scripts/popobawa.py music=horror_piano
 """
 
+import os
+import sys
+
+# OpenBLAS on Apple Silicon can SIGSEGV (exit -11) during import if it
+# spawns many gemm threads. Pin this before numpy / TTS / Whisper load.
+for _k, _v in (
+    ("OPENBLAS_NUM_THREADS", "1"),
+    ("OMP_NUM_THREADS", "1"),
+    ("MKL_NUM_THREADS", "1"),
+    ("VECLIB_MAXIMUM_THREADS", "1"),
+    ("NUMEXPR_NUM_THREADS", "1"),
+    ("TOKENIZERS_PARALLELISM", "false"),
+):
+    os.environ[_k] = _v
+
+print("[run] starting pipeline", flush=True)
+
 import importlib.util
 import json
-import sys
 from pathlib import Path
 
+print("[run] loading config", flush=True)
 import config
+print("[run] loading tts", flush=True)
 from tts_engine import narrate
+print("[run] loading captions", flush=True)
 from captions_engine import transcribe_with_word_timestamps, captions_from_script
+print("[run] loading broll", flush=True)
 from broll_engine import fetch_story_broll
+print("[run] loading images", flush=True)
 from image_engine import generate_storyboard, visual_beat_times
 from video_engine import generate_video_storyboard
 from visuals_engine import normalize_video_type, trim_wav_to, wav_duration
 from assemble_video import assemble_from_images, assemble_from_videos
+print("[run] libraries ready", flush=True)
 
 
 def load_script_module(path: str):

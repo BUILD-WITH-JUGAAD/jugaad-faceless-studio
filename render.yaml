@@ -1,8 +1,5 @@
-databases:
-  - name: jugaad-db
-    databaseName: jugaad
-    plan: free
-    region: singapore
+# Auth DB is Neon (DATABASE_URL), not Render Postgres.
+# Local generate still uses SQLite unless DATABASE_URL is set.
 
 services:
   - type: web
@@ -23,6 +20,4 @@ services:
       - key: JUGAAD_SECRET
         generateValue: true
       - key: DATABASE_URL
-        fromDatabase:
-          name: jugaad-db
-          property: connectionString
+        sync: false
