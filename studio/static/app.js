@@ -14,6 +14,7 @@ const state = {
   epidemicLoaded: false,
   epidemicReq: 0,
   hls: null,
+  generateHintShown: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -476,27 +477,31 @@ function epidemicRow(track) {
 async function importEpidemic(track, button) {
   if (button) button.disabled = true;
   $("epidemicStatus").textContent = "Saving " + track.title + " into Music…";
-  const res = await api("/api/epidemic/import", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      id: track.id,
-      title: track.title,
-      kind: track.kind || state.epidemicKind,
-    }),
-  });
-  const body = await res.json().catch(() => ({}));
-  const detail = typeof body.detail === "string" ? body.detail : "";
-  if (button) button.disabled = false;
-  if (!res.ok) {
-    $("epidemicStatus").textContent = detail || "Could not download that sound.";
-    return;
+  try {
+    const res = await api("/api/epidemic/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: track.id,
+        title: track.title,
+        kind: track.kind || state.epidemicKind,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    const detail = typeof body.detail === "string" ? body.detail : "";
+    if (!res.ok) {
+      $("epidemicStatus").textContent = detail || "Could not download that sound.";
+      return;
+    }
+    state.music = body.id;
+    closeEpidemic();
+    $("jobMeta").textContent = "Added " + body.name;
+    await loadOptions();
+  } catch (err) {
+    $("epidemicStatus").textContent = "Could not download that sound.";
+  } finally {
+    if (button) button.disabled = false;
   }
-  state.music = body.id;
-  closeEpidemic();
-  $("jobMeta").textContent = "Added " + body.name;
-  await loadOptions();
-  playPreview(body, document.querySelector(".tune.is-on"));
 }
 
 async function uploadTrack(file) {
@@ -513,7 +518,6 @@ async function uploadTrack(file) {
   state.music = body.id;
   $("jobMeta").textContent = "Added " + body.name;
   await loadOptions();
-  playPreview(body, document.querySelector(".tune.is-on"));
 }
 
 async function loadOptions() {
@@ -525,11 +529,17 @@ async function loadOptions() {
   const gen = data.generate || {};
   if (gen.enabled === false) {
     $("generate").disabled = true;
-    $("jobMeta").textContent = gen.hint || "Generate is off on this host.";
-    const fine = document.querySelector(".fine");
-    if (fine) fine.textContent = gen.hint;
-  } else if (state.model === "live" && keys.pexels && !keys.pexels.set) {
-    $("jobMeta").textContent = "Add a Pexels key in Settings before generating live b-roll.";
+    if (!state.generateHintShown) {
+      state.generateHintShown = true;
+      $("jobMeta").textContent = gen.hint || "Generate is off on this host.";
+      const fine = document.querySelector(".fine");
+      if (fine) fine.textContent = gen.hint;
+    }
+  } else {
+    $("generate").disabled = false;
+    if (state.model === "live" && keys.pexels && !keys.pexels.set) {
+      $("jobMeta").textContent = "Add a Pexels key in Settings before generating live b-roll.";
+    }
   }
 }
 

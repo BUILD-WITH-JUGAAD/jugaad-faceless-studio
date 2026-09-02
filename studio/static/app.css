@@ -424,7 +424,7 @@ textarea:focus, input:focus { outline: 1px solid var(--ember); border-color: var
   justify-content: space-between;
   align-items: center;
 }
-.go:disabled { opacity: 0.45; cursor: wait; }
+.go:disabled { opacity: 0.45; cursor: not-allowed; }
 a.go { text-decoration: none; color: #1a100a; box-sizing: border-box; }
 .go kbd {
   font-family: "IBM Plex Mono", monospace;
@@ -724,7 +724,7 @@ a.go { text-decoration: none; color: #1a100a; box-sizing: border-box; }
 }
 .epidemic-row .row-actions button[disabled] {
   opacity: 0.45;
-  cursor: wait;
+  cursor: not-allowed;
 }
 .epidemic-more {
   margin: 0 0 14px;
