@@ -8,7 +8,7 @@ services:
     plan: free
     region: singapore
     healthCheckPath: /api/health
-    buildCommand: pip install -r requirements-web.txt
+    buildCommand: pip install --upgrade pip && pip install "setuptools<81" wheel && pip install -r requirements-web.txt
     startCommand: python studio.py
     envVars:
       - key: PYTHON_VERSION

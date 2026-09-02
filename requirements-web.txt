@@ -1,4 +1,6 @@
 # Web / Render install — no Coqui TTS or Whisper (those stay in requirements.txt for local generate).
+setuptools>=70,<81
+wheel>=0.44.0
 fastapi==0.115.6
 uvicorn==0.32.1
 pydantic==2.10.4

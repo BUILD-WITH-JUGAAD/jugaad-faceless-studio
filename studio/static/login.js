@@ -5,6 +5,15 @@ const nameInput = document.getElementById("name");
 const password = document.getElementById("password");
 const error = document.getElementById("authError");
 let mode = "login";
+let hosted = false;
+
+fetch("/api/health")
+  .then((res) => res.json())
+  .then((data) => {
+    hosted = Boolean(data.postgres) || data.generate === false;
+    setMode(mode);
+  })
+  .catch(() => {});
 
 function setMode(next) {
   mode = next;
@@ -12,8 +21,12 @@ function setMode(next) {
   document.getElementById("authKicker").textContent = register ? "New desk" : "Account";
   document.getElementById("authTitle").textContent = register ? "Create account" : "Sign in";
   document.getElementById("authCopy").textContent = register
-    ? "Then add your Pexels, Pollinations, and Epidemic Sound keys in Settings."
-    : "Use your desk. Keys stay on this machine, per account.";
+    ? (hosted
+      ? "Anyone can create an account. Add Pexels, Pollinations, and Epidemic keys in Settings. Cuts still render on your computer."
+      : "Then add your Pexels, Pollinations, and Epidemic Sound keys in Settings.")
+    : (hosted
+      ? "Sign in to your JUGAAD account. Keys are stored encrypted with the account, not in the browser."
+      : "Use your desk. Keys stay on this machine, per account.");
   document.getElementById("authSubmit").textContent = register ? "Create account" : "Sign in";
   toggle.textContent = register ? "Already have a desk? Sign in" : "Need an account? Create one";
   nameField.hidden = !register;

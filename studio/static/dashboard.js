@@ -41,6 +41,14 @@ document.getElementById("logout").addEventListener("click", logout);
 
   const optRes = await api("/api/options");
   const opt = await optRes.json();
+  const gen = opt.generate || {};
+  if (gen.enabled === false) {
+    const copy = document.querySelector(".dash-hero .dialog-copy");
+    if (copy) {
+      copy.textContent = gen.hint
+        || "This host keeps accounts and keys. Open Studio on your computer to generate (`python studio.py`).";
+    }
+  }
   const lib = document.getElementById("library");
   const empty = document.getElementById("libEmpty");
   const items = opt.library || [];
