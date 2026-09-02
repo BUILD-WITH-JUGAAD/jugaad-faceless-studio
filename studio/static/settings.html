@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JUGAAD — settings</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <header class="top">
+    <a class="brand" href="/">
+      <span class="mark">J</span>
+      <div>
+        <strong>JUGAAD</strong>
+        <em>faceless studio <span class="beta">beta</span></em>
+      </div>
+    </a>
+    <nav class="tabs" aria-label="Studio">
+      <a class="tab" href="/">Dashboard</a>
+      <a class="tab" href="/studio">Studio</a>
+      <a class="tab is-on" href="/settings">Settings</a>
+    </nav>
+    <div class="account">
+      <span id="who"></span>
+      <button type="button" class="tab" id="logout">Log out</button>
+    </div>
+  </header>
+
+  <main class="settings">
+    <p class="dialog-kicker">Settings</p>
+    <h1>Your API keys</h1>
+    <p class="dialog-copy">Each account stores its own keys on this machine. Leave a field blank to keep the saved key. Keys are never shown in full.</p>
+
+    <form id="keysForm" class="keys-form">
+      <label class="field deck">
+        <span>Pexels <small id="pexelsHint"></small></span>
+        <input id="pexels" type="password" autocomplete="off" spellcheck="false" placeholder="Live b-roll — pexels.com/api" />
+        <a href="https://www.pexels.com/api/" target="_blank" rel="noopener noreferrer">Get a free Pexels key</a>
+        <button type="button" class="clear-key" data-key="pexels">Remove</button>
+      </label>
+      <label class="field deck">
+        <span>Pollinations <small id="pollinationsHint"></small></span>
+        <input id="pollinations" type="password" autocomplete="off" spellcheck="false" placeholder="Optional — comic stills / paid video" />
+        <a href="https://enter.pollinations.ai/keys" target="_blank" rel="noopener noreferrer">Get a Pollinations key</a>
+        <button type="button" class="clear-key" data-key="pollinations">Remove</button>
+      </label>
+      <label class="field deck">
+        <span>Epidemic Sound <small id="epidemicHint"></small></span>
+        <input id="epidemic" type="password" autocomplete="off" spellcheck="false" placeholder="Music &amp; SFX — Epidemic Partner API" />
+        <a href="https://partner-content-api.epidemicsound.com" target="_blank" rel="noopener noreferrer">Epidemic Sound for developers</a>
+        <button type="button" class="clear-key" data-key="epidemic">Remove</button>
+      </label>
+      <p class="auth-error" id="keysError" hidden></p>
+      <p class="length-note" id="keysNote" hidden></p>
+      <button class="go auth-go" type="submit">Save keys</button>
+    </form>
+  </main>
+  <script src="/settings.js"></script>
+</body>
+</html>

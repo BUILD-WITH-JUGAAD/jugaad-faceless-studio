@@ -1,0 +1,26 @@
+# Free, self-hosted faceless-reel pipeline
+# ------------------------------------------
+# Text-to-speech (fully local, no API key, no usage cap)
+TTS==0.22.0                # Coqui TTS
+bangla==0.0.2              # 0.0.3+ uses Python 3.10-only type syntax (bool | None)
+
+# Captions (fully local, no API key)
+openai-whisper==20231117
+
+# Video assembly
+moviepy==1.0.3
+Pillow==10.4.0
+
+# Background footage (free tier API key required, ~200 req/hr)
+requests==2.32.3
+
+# Utilities
+python-dotenv==1.0.1
+tqdm==4.66.5
+
+# Studio UI
+fastapi==0.115.6
+uvicorn==0.32.1
+pydantic==2.10.4
+python-multipart==0.0.20
+itsdangerous==2.2.0

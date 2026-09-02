@@ -1,0 +1,9 @@
+# Web / Render install — no Coqui TTS or Whisper (those stay in requirements.txt for local generate).
+fastapi==0.115.6
+uvicorn==0.32.1
+pydantic==2.10.4
+python-multipart==0.0.20
+itsdangerous==2.2.0
+python-dotenv==1.0.1
+requests==2.32.3
+psycopg2-binary==2.9.10

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JUGAAD — faceless studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <header class="top">
+    <a class="brand" href="/" tabindex="0" aria-describedby="brandTip">
+      <span class="mark">J</span>
+      <div>
+        <strong>JUGAAD</strong>
+        <em>faceless studio <span class="beta">beta</span></em>
+      </div>
+      <p class="brand-tip" id="brandTip" role="tooltip">
+        Jugaad (Hindi/Nepali): The art of turning limited resources into clever solutions and creative ideas.
+      </p>
+    </a>
+    <nav class="tabs site-nav" aria-label="Studio">
+      <a class="tab" href="/">Dashboard</a>
+      <a class="tab is-on" href="/studio">Studio</a>
+      <a class="tab" href="/settings">Settings</a>
+    </nav>
+    <nav class="tabs work-tabs" role="tablist">
+      <button class="tab is-on" data-tab="video" type="button">Video</button>
+      <button class="tab" data-tab="images" type="button">Images <small>soon</small></button>
+    </nav>
+    <div class="status-pill" id="busyPill">idle</div>
+    <div class="account">
+      <span id="who"></span>
+      <button type="button" class="tab" id="logout">Log out</button>
+    </div>
+  </header>
+
+  <main id="view-video" class="layout">
+    <section class="composer">
+      <div class="composer-scroll">
+        <div class="deck">
+          <label class="field">
+            <span>Story</span>
+            <textarea id="prompt" rows="5" placeholder="Write the legend in full — what happened, who it happened to, and how it ends. JUGAAD narrates this, captions it, and cuts picture to the voice."></textarea>
+          </label>
+          <div class="row2">
+            <label class="field">
+              <span>Title</span>
+              <input id="title" type="text" placeholder="popobawa" maxlength="48" />
+            </label>
+            <label class="field">
+              <span>Setting search</span>
+              <input id="setting" type="text" placeholder="zanzibar night village" />
+            </label>
+          </div>
+        </div>
+
+        <fieldset class="field deck">
+          <legend>Model</legend>
+          <div class="cards" id="models"></div>
+        </fieldset>
+
+        <fieldset class="field deck">
+          <legend>Frame</legend>
+          <div class="sizes" id="sizes"></div>
+        </fieldset>
+
+        <fieldset class="field deck">
+          <legend>Length</legend>
+          <div class="lengths" id="lengths"></div>
+          <label class="seconds-row">
+            <span>Seconds</span>
+            <input id="seconds" type="number" min="0" max="3600" step="1" />
+          </label>
+          <p class="length-note" id="lengthNote"></p>
+        </fieldset>
+
+        <fieldset class="field deck">
+          <legend>Music</legend>
+          <div class="music" id="music"></div>
+          <div class="music-actions">
+            <label class="upload-track">
+              <input id="musicFile" type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/aac,.mp3,.wav,.m4a" hidden />
+              <span>Add mp3</span>
+            </label>
+            <button type="button" class="upload-track" id="epidemicOpen">Epidemic Sound</button>
+          </div>
+        </fieldset>
+      </div>
+
+      <div class="go-wrap">
+        <button class="go" id="generate" type="button">
+          <span>Generate video</span>
+          <kbd>↵</kbd>
+        </button>
+        <p class="fine">Runs on this machine. First render is slow (TTS + Whisper + edit). Keep the tab open.</p>
+      </div>
+    </section>
+
+    <section class="stage">
+      <div class="monitor" id="monitor">
+        <div class="frame" id="frame">
+          <video id="player" controls playsinline></video>
+          <div class="empty" id="empty">
+            <p>Your cut lands here.</p>
+            <span>Pick a ratio, write the story, hit generate.</span>
+          </div>
+        </div>
+      </div>
+      <div class="meta" id="jobMeta"></div>
+      <pre class="log" id="log" hidden></pre>
+      <div class="library">
+        <h2>Library</h2>
+        <ul id="library"></ul>
+        <div class="contact">
+          <a href="mailto:buildwithjugaad@gmail.com">buildwithjugaad@gmail.com</a>
+          <a href="https://github.com/buildwithjugaad/jugaad-faceless-studio/" target="_blank" rel="noopener noreferrer">github.com/buildwithjugaad/jugaad-faceless-studio</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <main id="view-images" class="layout coming" hidden>
+    <div class="soon">
+      <h1>Images, next.</h1>
+      <p>Same desk, stills instead of cuts — comic / cartoon / anime boards you can pull into a reel later. Not wired yet.</p>
+    </div>
+  </main>
+
+  <audio id="preview" preload="none"></audio>
+
+  <div class="dialog" id="dialog" hidden>
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+      <p class="dialog-kicker">Library</p>
+      <h3 id="dialogTitle">Delete this cut?</h3>
+      <p class="dialog-name" id="dialogName"></p>
+      <p class="dialog-copy">This permanently deletes the video and every associated file (audio, captions, b-roll, stills). You cannot undo it.</p>
+      <div class="dialog-actions">
+        <button type="button" id="dialogCancel">Keep it</button>
+        <button type="button" class="danger" id="dialogConfirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog" id="epidemic" hidden>
+    <div class="dialog-card epidemic-card" role="dialog" aria-modal="true" aria-labelledby="epidemicTitle">
+      <p class="dialog-kicker">Epidemic Sound</p>
+      <h3 id="epidemicTitle">Pick a sound</h3>
+      <div class="epidemic-kinds" role="tablist">
+        <button type="button" class="is-on" data-kind="music" id="epidemicKindMusic">Music</button>
+        <button type="button" data-kind="sfx" id="epidemicKindSfx">Sound effects</button>
+      </div>
+      <form class="epidemic-search" id="epidemicSearch">
+        <input id="epidemicQuery" type="search" placeholder="Search horror, cinematic, dark…" autocomplete="off" />
+        <button type="submit">Search</button>
+      </form>
+      <p class="dialog-copy" id="epidemicStatus">Loading catalogue…</p>
+      <ul class="epidemic-list" id="epidemicList"></ul>
+      <p class="epidemic-more">
+        Didn’t hear it here?
+        <a href="https://share.epidemicsound.com/b2nl3t" target="_blank" rel="noopener noreferrer">Browse the full Epidemic Sound catalogue</a>
+      </p>
+      <div class="dialog-actions">
+        <button type="button" id="epidemicClose">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

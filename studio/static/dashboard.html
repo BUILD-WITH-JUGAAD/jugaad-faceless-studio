@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JUGAAD — dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <header class="top">
+    <a class="brand" href="/">
+      <span class="mark">J</span>
+      <div>
+        <strong>JUGAAD</strong>
+        <em>faceless studio <span class="beta">beta</span></em>
+      </div>
+    </a>
+    <nav class="tabs" aria-label="Studio">
+      <a class="tab is-on" href="/">Dashboard</a>
+      <a class="tab" href="/studio">Studio</a>
+      <a class="tab" href="/settings">Settings</a>
+    </nav>
+    <div class="account">
+      <span id="who"></span>
+      <button type="button" class="tab" id="logout">Log out</button>
+    </div>
+  </header>
+
+  <main class="dash">
+    <section class="dash-hero">
+      <p class="dialog-kicker">Dashboard</p>
+      <h1 id="hello">Welcome back.</h1>
+      <p class="dialog-copy">Add your three API keys, then open Studio and cut a reel. Each account keeps its own keys.</p>
+      <div class="dash-actions">
+        <a class="go auth-go" href="/studio">Open studio</a>
+        <a class="tab" href="/settings">API keys</a>
+      </div>
+    </section>
+
+    <section class="dash-keys" id="keyCards"></section>
+
+    <section class="dash-library">
+      <h2>Your library</h2>
+      <ul id="library"></ul>
+      <p class="dialog-copy" id="libEmpty">No cuts yet. Open Studio when your keys are in.</p>
+    </section>
+  </main>
+  <script src="/dashboard.js"></script>
+</body>
+</html>
