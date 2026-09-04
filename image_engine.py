@@ -234,6 +234,67 @@ def visual_beat_times(text: str, n: int, words: list, duration: float) -> list:
     return times
 
 
+def _beats_for(part: dict, panel_count: int = None) -> list:
+    explicit = part.get("image_prompts")
+    if explicit:
+        beats = [str(p).strip() for p in explicit if str(p).strip()]
+    else:
+        beats = pack_beats(part["text"], target=panel_count)
+    if not beats:
+        beats = [part.get("image_prompt") or part.get("broll_query") or (part.get("text") or "")[:160]]
+    return [b for b in beats if str(b).strip()]
+
+
+def generate_board(
+    part: dict,
+    out_dir: Path,
+    style: str = "comic",
+    character_lock: str = "",
+    character_seed: int = None,
+    width: int = None,
+    height: int = None,
+    panel_count: int = None,
+    on_panel=None,
+) -> list:
+    """
+    Stills only — no narration timing. Used by the Studio Images tab.
+    Returns [{path, beat, prompt, seed}, ...].
+    """
+    beats = _beats_for(part, panel_count=panel_count)
+    if not beats:
+        raise ValueError("Write a story before drawing panels.")
+    setting = part.get("broll_query") or ""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    panels = []
+    last_path = None
+    for i, beat in enumerate(beats):
+        prompt = _panel_prompt(beat, setting, character_lock, index=i)
+        dest = out_dir / f"panel_{i + 1}.jpg"
+        seed = None if character_seed is None else int(character_seed) + i * 17
+        try:
+            last_path = fetch_ai_image(
+                prompt, dest, seed=seed, style=style, width=width, height=height,
+            )
+        except RuntimeError as exc:
+            print(f"[image] panel {i + 1} failed ({exc}); reusing previous panel")
+            if last_path is None:
+                raise
+        panels.append({
+            "path": last_path,
+            "beat": beat,
+            "prompt": prompt,
+            "seed": seed,
+        })
+        print(f"[image] panel {i + 1}/{len(beats)}: {beat[:80]}")
+        if on_panel:
+            on_panel(i + 1, len(beats), panels[-1])
+        if i < len(beats) - 1:
+            time.sleep(2)
+    return panels
+
+
 def generate_storyboard(
     part: dict,
     out_dir: Path,
@@ -247,11 +308,7 @@ def generate_storyboard(
     Returns [{path, start, end, beat}, ...] covering the full narration.
     Uses part['image_prompts'] when provided, otherwise splits part['text'].
     """
-    explicit = part.get("image_prompts")
-    if explicit:
-        beats = [str(p).strip() for p in explicit if str(p).strip()]
-    else:
-        beats = pack_beats(part["text"])
+    beats = _beats_for(part)
     if not beats:
         beats = [part.get("image_prompt") or part.get("broll_query") or part["text"][:160]]
 

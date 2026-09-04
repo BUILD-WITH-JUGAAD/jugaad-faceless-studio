@@ -1,4 +1,4 @@
-const FIELDS = ["pexels", "pollinations", "epidemic"];
+const FIELDS = ["pexels", "pollinations", "epidemic", "openai"];
 const clear = {};
 
 async function api(url, options) {
@@ -62,7 +62,7 @@ document.getElementById("keysForm").addEventListener("submit", async (e) => {
   Object.keys(clear).forEach((k) => { delete clear[k]; });
   showKeys(data.keys || data);
   note.hidden = false;
-  note.textContent = "Saved. Studio and Epidemic Sound will use these keys.";
+  note.textContent = "Saved. Studio will use these keys.";
 });
 
 (async () => {

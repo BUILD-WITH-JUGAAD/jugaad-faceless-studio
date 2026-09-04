@@ -25,6 +25,7 @@ document.getElementById("logout").addEventListener("click", logout);
     { id: "pexels", label: "Pexels", hint: "Live b-roll stock video", href: "https://www.pexels.com/api/" },
     { id: "pollinations", label: "Pollinations", hint: "Comic / cartoon / anime stills (optional paid video)", href: "https://enter.pollinations.ai/keys" },
     { id: "epidemic", label: "Epidemic Sound", hint: "Music and sound effects", href: "https://partner-content-api.epidemicsound.com" },
+    { id: "openai", label: "OpenAI", hint: "Write the story from a short prompt", href: "https://platform.openai.com/api-keys" },
   ];
   const wrap = document.getElementById("keyCards");
   cards.forEach((item) => {

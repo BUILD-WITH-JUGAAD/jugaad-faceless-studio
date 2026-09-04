@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=5" />
+  <link rel="stylesheet" href="/app.css?v=12" />
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -29,7 +29,7 @@
     </nav>
     <nav class="tabs work-tabs" role="tablist">
       <button class="tab is-on" data-tab="video" type="button">Video</button>
-      <button class="tab" data-tab="images" type="button">Images <small>soon</small></button>
+      <button class="tab" data-tab="images" type="button">Images</button>
     </nav>
     <div class="status-pill" id="busyPill">idle</div>
     <div class="account">
@@ -43,24 +43,39 @@
       <div class="composer-scroll">
         <div class="deck">
           <label class="field">
-            <span>Story</span>
-            <textarea id="prompt" rows="5" placeholder="Write the legend in full — what happened, who it happened to, and how it ends. JUGAAD narrates this, captions it, and cuts picture to the voice."></textarea>
+            <span class="field-head">
+              Story
+              <button type="button" class="text-ai" id="expandStory">Write with AI</button>
+            </span>
+            <textarea id="prompt" rows="5" placeholder="A short prompt is enough — e.g. Popobawa in Zanzibar. Write with AI, then edit before you generate."></textarea>
           </label>
           <div class="row2">
             <label class="field">
               <span>Title</span>
-              <input id="title" type="text" placeholder="popobawa" maxlength="48" />
+              <input id="title" type="text" placeholder="from the story" maxlength="48" />
             </label>
             <label class="field">
               <span>Setting search</span>
-              <input id="setting" type="text" placeholder="zanzibar night village" />
+              <input id="setting" type="text" placeholder="from the story — edit for Pexels" maxlength="80" />
             </label>
           </div>
         </div>
 
         <fieldset class="field deck">
+          <legend>AI story engine</legend>
+          <div class="cards" id="storyEngines"></div>
+          <p class="length-note" id="storyEngineNote"></p>
+        </fieldset>
+
+        <fieldset class="field deck">
           <legend>Model</legend>
           <div class="cards" id="models"></div>
+        </fieldset>
+
+        <fieldset class="field deck">
+          <legend>Voice</legend>
+          <div class="cards" id="voices"></div>
+          <p class="length-note" id="voiceNote">Click a voice to hear a sample.</p>
         </fieldset>
 
         <fieldset class="field deck">
@@ -108,10 +123,15 @@
             <p>Your cut lands here.</p>
             <span>Pick a ratio, write the story, hit generate.</span>
           </div>
+          <div class="progress" id="progress" hidden>
+            <p id="progressLabel">Generating…</p>
+            <div class="bar" aria-hidden="true"><i id="progressBar"></i></div>
+            <span id="progressPct">0%</span>
+          </div>
         </div>
+        <pre class="log" id="log" hidden></pre>
       </div>
       <div class="meta" id="jobMeta"></div>
-      <pre class="log" id="log" hidden></pre>
       <div class="library">
         <h2>Library</h2>
         <ul id="library"></ul>
@@ -123,11 +143,88 @@
     </section>
   </main>
 
-  <main id="view-images" class="layout coming" hidden>
-    <div class="soon">
-      <h1>Images, next.</h1>
-      <p>Same desk, stills instead of cuts — comic / cartoon / anime boards you can pull into a reel later. Not wired yet.</p>
-    </div>
+  <main id="view-images" class="layout" hidden>
+    <section class="composer">
+      <div class="composer-scroll">
+        <div class="deck">
+          <label class="field">
+            <span class="field-head">
+              Story
+              <button type="button" class="text-ai" id="expandImageStory">Write with AI</button>
+            </span>
+            <textarea id="imagePrompt" rows="5" placeholder="A short prompt is enough — e.g. Popobawa in Zanzibar. Write with AI, then edit before you generate stills."></textarea>
+          </label>
+          <div class="row2">
+            <label class="field">
+              <span>Title</span>
+              <input id="imageTitle" type="text" placeholder="from the story" maxlength="48" />
+            </label>
+            <label class="field">
+              <span>Setting</span>
+              <input id="imageSetting" type="text" placeholder="from the story — edit for location" maxlength="80" />
+            </label>
+          </div>
+        </div>
+
+        <fieldset class="field deck">
+          <legend>AI story engine</legend>
+          <div class="cards" id="imageStoryEngines"></div>
+          <p class="length-note" id="imageStoryEngineNote"></p>
+        </fieldset>
+
+        <fieldset class="field deck">
+          <legend>Style</legend>
+          <div class="cards" id="imageModels"></div>
+        </fieldset>
+
+        <fieldset class="field deck">
+          <legend>Frame</legend>
+          <div class="sizes" id="imageSizes"></div>
+        </fieldset>
+
+        <fieldset class="field deck">
+          <legend>Panels</legend>
+          <label class="seconds-row">
+            <span>Count</span>
+            <input id="imagePanels" type="number" min="3" max="16" step="1" placeholder="auto" />
+          </label>
+          <p class="length-note">Leave blank to split the story automatically. 3–16 panels.</p>
+        </fieldset>
+      </div>
+
+      <div class="go-wrap">
+        <button class="go" id="generateImages" type="button">
+          <span>Generate stills</span>
+          <kbd>↵</kbd>
+        </button>
+        <p class="fine" id="imageFine">Pollinations draws the panels. No TTS. Works on this host — keep the tab open.</p>
+      </div>
+    </section>
+
+    <section class="stage">
+      <div class="monitor" id="imageMonitor">
+        <div class="frame" id="imageFrame">
+          <img id="imagePreview" alt="" hidden />
+          <div class="empty" id="imageEmpty">
+            <p>Your board lands here.</p>
+            <span>Pick a style, write the story, hit generate stills.</span>
+          </div>
+          <div class="progress" id="imageProgress" hidden>
+            <p id="imageProgressLabel">Drawing…</p>
+            <div class="bar" aria-hidden="true"><i id="imageProgressBar"></i></div>
+            <span id="imageProgressPct">0%</span>
+          </div>
+        </div>
+        <pre class="log" id="imageLog" hidden></pre>
+      </div>
+      <div class="board" id="imageBoard" hidden></div>
+      <div class="meta" id="imageMeta"></div>
+      <div class="library">
+        <h2>Boards</h2>
+        <ul id="imageLibrary"></ul>
+        <button type="button" class="upload-track" id="useBoard" hidden>Use in reel</button>
+      </div>
+    </section>
   </main>
 
   <audio id="preview" preload="none"></audio>
@@ -137,7 +234,7 @@
       <p class="dialog-kicker">Library</p>
       <h3 id="dialogTitle">Delete this cut?</h3>
       <p class="dialog-name" id="dialogName"></p>
-      <p class="dialog-copy">This permanently deletes the video and every associated file (audio, captions, b-roll, stills). You cannot undo it.</p>
+      <p class="dialog-copy" id="dialogCopy">This permanently deletes the video and every associated file (audio, captions, b-roll, stills). You cannot undo it.</p>
       <div class="dialog-actions">
         <button type="button" id="dialogCancel">Keep it</button>
         <button type="button" class="danger" id="dialogConfirm">Delete</button>
@@ -170,6 +267,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
-  <script src="/app.js?v=5"></script>
+  <script src="/app.js?v=12"></script>
 </body>
 </html>

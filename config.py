@@ -98,13 +98,33 @@ AI_VIDEO_SECONDS = 5
 # Coqui TTS model — this one is a good, moody, low-cost-to-run English voice.
 # Full model list: https://github.com/coqui-ai/TTS#model-list
 TTS_MODEL = "tts_models/en/vctk/vits"
-TTS_SPEAKER = "p326"  # deeper, slower voice — good for horror narration.
-                       # swap speaker IDs to audition different voices
+TTS_SPEAKER = "p326"  # horror default in this checkpoint (sounds female; VCTK IDs are scrambled)
+# Curated VCTK speakers for the studio. Same local model, no extra download.
+# Coqui's tts_models/en/vctk/vits embeddings do NOT match VCTK speaker-info.txt
+# (known zoo bug). Labels below are by ear for this checkpoint, not corpus metadata.
+TTS_VOICES = (
+    {"id": "p326", "label": "Deep Male", "hint": "Horror default"},
+    {"id": "p270", "label": "Low Female", "hint": "Calm, even"},
+    {"id": "p232", "label": "Grave Male", "hint": "Heavier read"},
+    {"id": "p364", "label": "Warm Female", "hint": "Softer narration"},
+    {"id": "p376", "label": "Steady Male", "hint": "Even pacing"},
+    {"id": "p243", "label": "Young Female", "hint": "Brighter, quicker"},
+    {"id": "p267", "label": "Warm Male", "hint": "Storyteller"},
+    {"id": "p225", "label": "Clear Female", "hint": "Direct read"},
+    {"id": "p228", "label": "Soft Male", "hint": "Quiet, close"},
+    {"id": "p294", "label": "Bright Female", "hint": "Crisp read"},
+)
 
 # ---- Whisper settings ----
 WHISPER_MODEL = "small"   # tiny/base/small/medium/large — small is a good speed/accuracy tradeoff on CPU
 
-# ---- Pexels settings ----
+# ---- OpenAI (story expand — Settings or .env; optional if Ollama is used) ----
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+# Local Ollama — no key. Default model fits a 16 GB Mac.
+OLLAMA_HOST = (os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL") or "gemma3:4b"
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")  # put your free key in a .env file
 PEXELS_ORIENTATION = "portrait"  # unused for search; we crop landscape stock to 9:16
 

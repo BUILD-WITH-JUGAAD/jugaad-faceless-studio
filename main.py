@@ -39,7 +39,7 @@ from pathlib import Path
 print("[run] loading config", flush=True)
 import config
 print("[run] loading tts", flush=True)
-from tts_engine import narrate
+from tts_engine import narrate, resolve_voice
 print("[run] loading captions", flush=True)
 from captions_engine import transcribe_with_word_timestamps, captions_from_script
 print("[run] loading broll", flush=True)
@@ -99,7 +99,8 @@ def parse_cli(argv):
             "Usage: python main.py scripts/popobawa.py [series_name] "
             "model=live|comic|cartoon|anime|ai_video "
             "[image_model=flux] [video_model=wan-fast] "
-            "[music=on|off|random|<track name>] [size=9:16|1:1|4:5|16:9|4:3] "
+            "[music=on|off|random|<track name>] [voice=p326] "
+            "[size=9:16|1:1|4:5|16:9|4:3] "
             "[max=180|0]"
         )
         sys.exit(1)
@@ -125,6 +126,11 @@ def parse_cli(argv):
         elif key in {"music", "music_track"}:
             _apply_music_choice(value)
             overrides["music"] = value
+        elif key in {"voice", "speaker", "tts_speaker"}:
+            speaker = resolve_voice(value)
+            config.TTS_SPEAKER = speaker
+            overrides["voice"] = speaker
+            print("[run] voice {0}".format(speaker))
         elif key in {"size", "aspect", "aspect_ratio"}:
             w, h = config.apply_aspect_ratio(value)
             overrides["size"] = value
@@ -143,13 +149,17 @@ def parse_cli(argv):
     return script_path, series_name, overrides
 
 
-def _audio_is_current(audio_path: Path, text: str) -> bool:
+def _audio_payload(text: str, speaker: str) -> str:
+    return "SPEAKER={0}\n{1}".format(speaker, text)
+
+
+def _audio_is_current(audio_path: Path, text: str, speaker: str) -> bool:
     sidecar = audio_path.with_suffix(".script.txt")
     if not audio_path.exists() or audio_path.stat().st_size < 1000:
         return False
     if not sidecar.exists():
         return False
-    return sidecar.read_text() == text
+    return sidecar.read_text() == _audio_payload(text, speaker)
 
 
 def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
@@ -167,8 +177,11 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
     if shorts_max is None:
         shorts_max = getattr(config, "SHORTS_MAX_SECONDS", 180)
     shorts_max = int(shorts_max or 0)
+    speaker = resolve_voice(overrides.get("voice") or config.TTS_SPEAKER)
+    config.TTS_SPEAKER = speaker
     single = len(parts) == 1
     print(f"[run] video_type={normalize_video_type(series_type)}")
+    print(f"[run] voice={speaker}")
 
     for i, part in enumerate(parts, start=1):
         stem = _clip_stem(series_name, i, len(parts))
@@ -178,11 +191,11 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
 
         # 1. narration — regenerate if the script text changed
         audio_path = config.AUDIO_DIR / f"{stem}.wav"
-        if _audio_is_current(audio_path, part["text"]):
+        if _audio_is_current(audio_path, part["text"], speaker):
             print(f"[tts] reusing {audio_path.name}")
         else:
-            narrate(part["text"], audio_path)
-            audio_path.with_suffix(".script.txt").write_text(part["text"])
+            narrate(part["text"], audio_path, speaker=speaker)
+            audio_path.with_suffix(".script.txt").write_text(_audio_payload(part["text"], speaker))
 
         duration = wav_duration(audio_path)
         if shorts_max:

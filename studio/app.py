@@ -7,6 +7,7 @@ JUGAAD studio — local web UI for the faceless reel pipeline.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -38,6 +39,15 @@ from epidemic_engine import open_media as epidemic_open_media
 from epidemic_engine import open_preview as epidemic_open_preview
 from epidemic_engine import rewrite_hls as epidemic_rewrite_hls
 from music_engine import list_music_tracks
+from story_engine import (
+    StoryError,
+    effective_setting,
+    effective_title,
+    generate_story,
+    ollama_status,
+)
+
+from tts_engine import list_voices, resolve_voice, voice_preview_path
 
 from . import auth
 
@@ -52,7 +62,9 @@ app = FastAPI(title="JUGAAD", version="0.1")
 
 _lock = threading.Lock()
 _current = None
+_voice_preview_lock = threading.Lock()
 _STATIC_EXT = {".css", ".js", ".map", ".ico", ".png", ".svg", ".jpg", ".jpeg", ".webp", ".woff", ".woff2"}
+_IMAGE_STYLES = {"comic", "cartoon", "anime"}
 
 
 @app.middleware("http")
@@ -104,6 +116,18 @@ def _page(name: str) -> FileResponse:
 
 
 @contextmanager
+def _openai_for(user_id: int):
+    extra = auth.apply_user_keys(user_id)
+    prev = config.OPENAI_API_KEY
+    try:
+        if extra.get("OPENAI_API_KEY"):
+            config.OPENAI_API_KEY = extra["OPENAI_API_KEY"]
+        yield
+    finally:
+        config.OPENAI_API_KEY = prev
+
+
+@contextmanager
 def _epidemic_for(user_id: int):
     keys = auth.apply_user_keys(user_id)
     user_key = (keys.get("EPIDEMIC_API_KEY") or "").strip()
@@ -149,6 +173,64 @@ def _user_owns_stem(user_id: int, stem: str) -> bool:
     return stem in _user_stems(user_id)
 
 
+def _image_jobs_for(user_id: int):
+    jobs = []
+    for job_path in JOBS_DIR.glob("*.json"):
+        try:
+            data = json.loads(job_path.read_text())
+        except (OSError, ValueError):
+            continue
+        if data.get("kind") != "images":
+            continue
+        if data.get("user_id") != user_id:
+            continue
+        jobs.append(data)
+    return jobs
+
+
+def _user_owns_image(user_id: int, stem: str) -> bool:
+    return any(job.get("stem") == stem for job in _image_jobs_for(user_id))
+
+
+def _panel_public(stem: str, panel: dict) -> dict:
+    path = Path(panel.get("path") or "")
+    name = path.name or "panel.jpg"
+    return {
+        "file": name,
+        "url": "/media/images/{0}/{1}".format(stem, name),
+        "beat": panel.get("beat") or "",
+    }
+
+
+def _user_boards(user_id: int) -> list:
+    boards = []
+    for job in _image_jobs_for(user_id):
+        if job.get("status") != "done":
+            continue
+        panels = job.get("panels") or []
+        if not panels:
+            continue
+        boards.append({
+            "name": job.get("title") or job.get("stem"),
+            "stem": job.get("stem"),
+            "file": job.get("stem"),
+            "cover": panels[0].get("url"),
+            "count": len(panels),
+            "panels": panels,
+            "prompt": job.get("prompt") or "",
+            "setting": job.get("setting") or "",
+            "model": job.get("model") or "comic",
+            "size": job.get("size") or "9:16",
+            "mtime": _job_path(job["id"]).stat().st_mtime if _job_path(job["id"]).exists() else 0,
+        })
+    boards.sort(key=lambda item: item.get("mtime") or 0, reverse=True)
+    return boards[:24]
+
+
+def _seed_for(stem: str) -> int:
+    return int(hashlib.md5(stem.encode("utf-8")).hexdigest()[:8], 16) % 100000
+
+
 class GenerateBody(BaseModel):
     prompt: str = Field(..., min_length=20)
     model: str = "live"
@@ -156,6 +238,7 @@ class GenerateBody(BaseModel):
     size: str = "9:16"
     title: str = ""
     setting: str = ""
+    voice: str = ""
     length: str = "youtube"
     seconds: int = 180
 
@@ -164,6 +247,23 @@ class EpidemicImportBody(BaseModel):
     id: str
     title: str = ""
     kind: str = "music"
+
+
+class ImageBody(BaseModel):
+    prompt: str = Field(..., min_length=20)
+    model: str = "comic"
+    size: str = "9:16"
+    title: str = ""
+    setting: str = ""
+    panels: int = 0
+
+
+class StoryExpandBody(BaseModel):
+    idea: str = ""
+    title: str = ""
+    setting: str = ""
+    seconds: int = 180
+    provider: str = "ollama"
 
 
 def _slug(text: str, fallback: str) -> str:
@@ -222,6 +322,15 @@ def _options(user_id: int) -> dict:
             {"id": "cartoon", "label": "Cartoon", "hint": "Flat cel-shaded stills"},
             {"id": "anime", "label": "Anime", "hint": "Clean line art stills"},
         ],
+        "voices": [
+            {
+                "id": voice["id"],
+                "label": voice["label"],
+                "hint": voice["hint"],
+                "preview": "/api/voices/{0}/preview".format(voice["id"]),
+            }
+            for voice in list_voices()
+        ],
         "sizes": [
             {"id": "9:16", "label": "9:16", "hint": "Shorts / Reels", "w": 9, "h": 16},
             {"id": "1:1", "label": "1:1", "hint": "Square", "w": 1, "h": 1},
@@ -244,6 +353,13 @@ def _options(user_id: int) -> dict:
                 or (getattr(config, "EPIDEMIC_API_KEY", "") or "").strip()
             )
         },
+        "openai": {
+            "enabled": bool(
+                (keys.get("openai") or "").strip()
+                or (getattr(config, "OPENAI_API_KEY", "") or "").strip()
+            )
+        },
+        "story": _story_options(user_id, keys),
         "keys": auth.keys_public(user_id),
         "generate": {
             "enabled": auth.generate_enabled(),
@@ -253,6 +369,23 @@ def _options(user_id: int) -> dict:
                 if not auth.generate_enabled()
                 else ""
             ),
+        },
+        "images": {
+            "enabled": True,
+            "hint": (
+                "Pollinations draws the panels here. No TTS. A key in Settings helps if the free pool is busy."
+                + (
+                    " Files on this host vanish if the box sleeps — generate locally to keep them."
+                    if os.getenv("RENDER")
+                    else ""
+                )
+            ),
+            "models": [
+                {"id": "comic", "label": "2D comic", "hint": "Graphic-novel stills"},
+                {"id": "cartoon", "label": "Cartoon", "hint": "Flat cel-shaded stills"},
+                {"id": "anime", "label": "Anime", "hint": "Clean line art stills"},
+            ],
+            "library": _user_boards(user_id),
         },
     }
 
@@ -344,6 +477,79 @@ async def api_settings_put(request: Request):
     return {"keys": auth.save_keys(user["id"], updates)}
 
 
+def _story_options(_user_id: int, keys: dict) -> dict:
+    ollama = ollama_status()
+    openai_on = bool(
+        (keys.get("openai") or "").strip()
+        or (getattr(config, "OPENAI_API_KEY", "") or "").strip()
+    )
+    return {
+        "default": "ollama",
+        "providers": [
+            {
+                "id": "ollama",
+                "label": "Ollama",
+                "hint": "FREE LOCAL" if ollama.get("online") else "offline",
+                "online": bool(ollama.get("online")),
+                "model": ollama.get("model") or "gemma3:4b",
+                "model_ready": bool(ollama.get("model_ready")),
+            },
+            {
+                "id": "openai",
+                "label": "OpenAI",
+                "hint": "API",
+                "online": openai_on,
+            },
+        ],
+    }
+
+
+@app.post("/api/story/expand")
+def api_story_expand(request: Request, body: StoryExpandBody):
+    user = _require_user(request)
+    provider = (body.provider or "ollama").strip().lower()
+    try:
+        if provider in ("openai", "chatgpt", "gpt"):
+            with _openai_for(user["id"]):
+                pack = generate_story(
+                    "openai",
+                    body.idea,
+                    title=body.title,
+                    setting=body.setting,
+                    seconds=body.seconds,
+                )
+        else:
+            pack = generate_story(
+                "ollama",
+                body.idea,
+                title=body.title,
+                setting=body.setting,
+                seconds=body.seconds,
+            )
+    except StoryError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+    return {
+        "ok": True,
+        "text": pack["text"],
+        "title": pack.get("title") or "",
+        "setting": pack.get("setting") or "",
+        "provider": provider,
+    }
+
+
+@app.post("/api/story/derive")
+def api_story_derive(request: Request, body: StoryExpandBody):
+    _require_user(request)
+    text = (body.idea or "").strip()
+    if not text:
+        raise HTTPException(400, "Story is empty.")
+    return {
+        "ok": True,
+        "title": effective_title(text, body.title),
+        "setting": effective_setting(text, body.setting),
+    }
+
+
 @app.get("/api/options")
 def api_options(request: Request):
     user = _require_user(request)
@@ -384,7 +590,9 @@ def api_generate(request: Request, body: GenerateBody):
         if _current is not None:
             raise HTTPException(409, "A render is already running. Wait for it to finish.")
         job_id = uuid.uuid4().hex[:8]
-        stem = _slug(body.title, "jugaad_{0}".format(job_id))
+        title = effective_title(prompt, body.title)
+        setting = effective_setting(prompt, body.setting)
+        stem = _slug(title, "jugaad_{0}".format(job_id))
         job = {
             "id": job_id,
             "user_id": user["id"],
@@ -392,11 +600,12 @@ def api_generate(request: Request, body: GenerateBody):
             "prompt": prompt,
             "model": body.model,
             "music": body.music or "random",
+            "voice": resolve_voice(body.voice),
             "size": body.size or "9:16",
             "length": body.length or "youtube",
             "seconds": seconds,
-            "title": body.title.strip() or stem,
-            "setting": (body.setting or "").strip(),
+            "title": title,
+            "setting": setting,
             "stem": stem,
             "created": datetime.now().isoformat(timespec="seconds"),
             "log": "",
@@ -409,6 +618,120 @@ def api_generate(request: Request, body: GenerateBody):
     thread = threading.Thread(target=_run_job, args=(job_id,), daemon=True)
     thread.start()
     return job
+
+
+@app.post("/api/images/generate")
+def api_images_generate(request: Request, body: ImageBody):
+    global _current
+    user = _require_user(request)
+    prompt = (body.prompt or "").strip()
+    if len(prompt.split()) < 8:
+        raise HTTPException(400, "Write a fuller story — at least a few sentences.")
+    style = (body.model or "comic").strip().lower()
+    if style not in _IMAGE_STYLES:
+        raise HTTPException(400, "Pick comic, cartoon, or anime.")
+    try:
+        config.apply_aspect_ratio(body.size)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    panels = int(body.panels or 0)
+    if panels and (panels < 3 or panels > 16):
+        raise HTTPException(400, "Panel count must be between 3 and 16.")
+
+    with _lock:
+        if _current is not None:
+            raise HTTPException(409, "A render is already running. Wait for it to finish.")
+        job_id = uuid.uuid4().hex[:8]
+        title = effective_title(prompt, body.title)
+        setting = effective_setting(prompt, body.setting)
+        stem = _slug(title, "board_{0}".format(job_id))
+        folder = config.AI_IMAGE_DIR / stem
+        video = config.OUTPUT_DIR / (stem + ".mp4")
+        if folder.exists() or video.exists():
+            stem = "{0}_{1}".format(stem, job_id)
+        job = {
+            "id": job_id,
+            "kind": "images",
+            "user_id": user["id"],
+            "status": "queued",
+            "prompt": prompt,
+            "model": style,
+            "size": body.size or "9:16",
+            "title": title,
+            "setting": setting,
+            "stem": stem,
+            "panels": [],
+            "panel_count": panels,
+            "created": datetime.now().isoformat(timespec="seconds"),
+            "log": "",
+            "error": None,
+        }
+        _write_job(job)
+        _current = job_id
+
+    thread = threading.Thread(target=_run_image_job, args=(job_id,), daemon=True)
+    thread.start()
+    return job
+
+
+def _run_image_job(job_id: str) -> None:
+    global _current
+    job = _read_job(job_id)
+    job["status"] = "running"
+    job["log"] = "Drawing panels…\n"
+    _write_job(job)
+    log_lines = ["Drawing panels…"]
+    prev_key = config.POLLINATIONS_API_KEY
+    prev_size = (config.VIDEO_WIDTH, config.VIDEO_HEIGHT)
+    user_id = job.get("user_id")
+    try:
+        extra = auth.apply_user_keys(int(user_id)) if user_id else {}
+        if extra.get("POLLINATIONS_API_KEY"):
+            config.POLLINATIONS_API_KEY = extra["POLLINATIONS_API_KEY"]
+        try:
+            config.apply_aspect_ratio(job.get("size") or "9:16")
+        except ValueError:
+            pass
+        count = int(job.get("panel_count") or 0) or None
+        stem = job["stem"]
+        out_dir = config.AI_IMAGE_DIR / stem
+        from image_engine import generate_board
+
+        def on_panel(done, total, panel):
+            public = _panel_public(stem, panel)
+            current = _read_job(job_id)
+            current["panels"] = (current.get("panels") or []) + [public]
+            log_lines.append("[image] panel {0}/{1}: {2}".format(done, total, (panel.get("beat") or "")[:80]))
+            current["log"] = "\n".join(log_lines)[-12000:]
+            _write_job(current)
+
+        generate_board(
+            {
+                "text": job["prompt"],
+                "broll_query": job.get("setting") or "",
+            },
+            out_dir,
+            style=job["model"],
+            character_seed=_seed_for(stem),
+            panel_count=count,
+            on_panel=on_panel,
+        )
+        job = _read_job(job_id)
+        job["status"] = "done"
+        job["log"] = "\n".join(log_lines + ["Board ready."])[-20000:]
+        _write_job(job)
+    except Exception as exc:
+        job = _read_job(job_id)
+        job["status"] = "error"
+        job["error"] = str(exc)
+        job["log"] = "\n".join(log_lines + [str(exc)])[-20000:]
+        _write_job(job)
+    finally:
+        config.POLLINATIONS_API_KEY = prev_key
+        config.VIDEO_WIDTH, config.VIDEO_HEIGHT = prev_size
+        with _lock:
+            if _current == job_id:
+                _current = None
 
 
 def _write_script(job: dict) -> Path:
@@ -459,6 +782,7 @@ def _run_job(job_id: str) -> None:
         job["stem"],
         "model={0}".format(job["model"]),
         "music={0}".format(job["music"]),
+        "voice={0}".format(resolve_voice(job.get("voice"))),
         "size={0}".format(job["size"]),
         "max={0}".format(job.get("seconds") if job.get("seconds") is not None else 180),
     ]
@@ -578,6 +902,37 @@ def _purge_library_stem(stem: str):
     return deleted
 
 
+def _purge_image_stem(stem: str, user_id: int):
+    deleted = []
+    _remove_path(config.AI_IMAGE_DIR / stem, config.AI_IMAGE_DIR, deleted)
+    for job_path in JOBS_DIR.glob("*.json"):
+        try:
+            data = json.loads(job_path.read_text())
+        except (OSError, ValueError):
+            continue
+        if data.get("kind") != "images":
+            continue
+        if data.get("stem") != stem:
+            continue
+        if data.get("user_id") != user_id:
+            continue
+        _remove_path(job_path, JOBS_DIR, deleted)
+    return deleted
+
+
+@app.delete("/api/images/{name}")
+def api_delete_images(request: Request, name: str):
+    user = _require_user(request)
+    name = _safe_name(name)
+    stem = Path(name).stem
+    if not _user_owns_image(user["id"], stem):
+        raise HTTPException(404, "Board not found")
+    deleted = _purge_image_stem(stem, user["id"])
+    if not deleted:
+        raise HTTPException(404, "Board not found")
+    return {"ok": True, "deleted": deleted}
+
+
 @app.delete("/api/library/{name}")
 def api_delete_library(request: Request, name: str):
     user = _require_user(request)
@@ -620,6 +975,50 @@ def _epidemic_stream(upstream, source_url: str):
             upstream.close()
 
     return StreamingResponse(chunks(), media_type=ctype)
+
+
+@app.get("/api/voices/{voice_id}/preview")
+def api_voice_preview(request: Request, voice_id: str):
+    _require_user(request)
+    speaker = resolve_voice(voice_id)
+    allowed = {item["id"] for item in list_voices()}
+    if speaker not in allowed:
+        raise HTTPException(404, "Unknown voice")
+    path = voice_preview_path(speaker)
+    if path.exists() and path.stat().st_size > 2000:
+        return FileResponse(str(path), media_type="audio/wav")
+    with _voice_preview_lock:
+        if path.exists() and path.stat().st_size > 2000:
+            return FileResponse(str(path), media_type="audio/wav")
+        env = dict(os.environ)
+        env["PYTHONUNBUFFERED"] = "1"
+        env["OPENBLAS_NUM_THREADS"] = "1"
+        env["OMP_NUM_THREADS"] = "1"
+        env["MKL_NUM_THREADS"] = "1"
+        env["VECLIB_MAXIMUM_THREADS"] = "1"
+        env["NUMEXPR_NUM_THREADS"] = "1"
+        env["TOKENIZERS_PARALLELISM"] = "false"
+        if sys.platform == "darwin":
+            env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+        cmd = [
+            _pipeline_python(),
+            "-u",
+            "-c",
+            "from tts_engine import ensure_voice_preview; ensure_voice_preview({0})".format(repr(speaker)),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(ROOT),
+                env=env,
+                capture_output=True,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "Voice sample took too long. Try again.")
+        if proc.returncode != 0 or not path.exists() or path.stat().st_size < 2000:
+            raise HTTPException(502, "Could not build that voice sample.")
+    return FileResponse(str(path), media_type="audio/wav")
 
 
 @app.get("/api/epidemic/tracks")
@@ -698,6 +1097,19 @@ def media_music(request: Request, name: str):
     if not path.exists() or path.parent.resolve() != config.MUSIC_DIR.resolve():
         raise HTTPException(404, "Track not found")
     return FileResponse(str(path), media_type="audio/mpeg")
+
+
+@app.get("/media/images/{stem}/{name}")
+def media_image(request: Request, stem: str, name: str):
+    user = _require_user(request)
+    stem = _safe_name(stem)
+    name = _safe_name(name)
+    if not _user_owns_image(user["id"], stem):
+        raise HTTPException(404, "Image not found")
+    path = config.AI_IMAGE_DIR / stem / name
+    if not path.exists() or not _inside(path, config.AI_IMAGE_DIR):
+        raise HTTPException(404, "Image not found")
+    return FileResponse(str(path), media_type="image/jpeg")
 
 
 @app.get("/media/output/{name}")

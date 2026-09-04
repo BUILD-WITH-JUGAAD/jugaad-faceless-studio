@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=4" />
+  <link rel="stylesheet" href="/app.css?v=8" />
 </head>
 <body class="page">
   <div class="grain" aria-hidden="true"></div>
@@ -54,11 +54,17 @@
         <a href="https://partner-content-api.epidemicsound.com" target="_blank" rel="noopener noreferrer">Epidemic Sound for developers</a>
         <button type="button" class="clear-key" data-key="epidemic">Remove</button>
       </label>
+      <label class="field deck">
+        <span>OpenAI <small id="openaiHint"></small></span>
+        <input id="openai" type="password" autocomplete="off" spellcheck="false" placeholder="Story expand — platform.openai.com" />
+        <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Get an OpenAI API key</a>
+        <button type="button" class="clear-key" data-key="openai">Remove</button>
+      </label>
       <p class="auth-error" id="keysError" hidden></p>
       <button class="go auth-go" type="submit">Save keys</button>
       <p class="form-note" id="keysNote" hidden></p>
     </form>
   </main>
-  <script src="/settings.js"></script>
+  <script src="/settings.js?v=7"></script>
 </body>
 </html>

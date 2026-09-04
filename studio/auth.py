@@ -23,7 +23,7 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _lock = threading.Lock()
 _ROUNDS = 200_000
 
-KEY_FIELDS = ("pexels", "pollinations", "epidemic")
+KEY_FIELDS = ("pexels", "pollinations", "epidemic", "openai")
 
 
 def database_url() -> str:
@@ -196,10 +196,12 @@ def init_db() -> None:
                         user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                         pexels TEXT NOT NULL DEFAULT '',
                         pollinations TEXT NOT NULL DEFAULT '',
-                        epidemic TEXT NOT NULL DEFAULT ''
+                        epidemic TEXT NOT NULL DEFAULT '',
+                        openai TEXT NOT NULL DEFAULT ''
                     )
                     """,
                 )
+                _ensure_key_columns(conn)
                 return
             conn.executescript(
                 """
@@ -215,9 +217,26 @@ def init_db() -> None:
                     pexels TEXT NOT NULL DEFAULT '',
                     pollinations TEXT NOT NULL DEFAULT '',
                     epidemic TEXT NOT NULL DEFAULT '',
+                    openai TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
                 """
+            )
+            _ensure_key_columns(conn)
+
+
+def _ensure_key_columns(conn) -> None:
+    for name in KEY_FIELDS:
+        if using_postgres():
+            _execute(
+                conn,
+                "ALTER TABLE user_keys ADD COLUMN IF NOT EXISTS {0} TEXT NOT NULL DEFAULT ''".format(name),
+            )
+            continue
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(user_keys)").fetchall()]
+        if name not in cols:
+            conn.execute(
+                "ALTER TABLE user_keys ADD COLUMN {0} TEXT NOT NULL DEFAULT ''".format(name)
             )
 
 
@@ -325,7 +344,10 @@ def get_keys(user_id: int) -> dict:
     if not row:
         return out
     for name in KEY_FIELDS:
-        out[name] = decrypt_value(row[name] or "")
+        try:
+            out[name] = decrypt_value(row[name] or "")
+        except (KeyError, IndexError):
+            out[name] = ""
     return out
 
 
@@ -352,22 +374,15 @@ def save_keys(user_id: int, updates: dict) -> dict:
             current[name] = text
     with _lock:
         with _db(write=True) as conn:
+            cols = ", ".join(KEY_FIELDS)
+            placeholders = ", ".join("?" for _ in KEY_FIELDS)
+            assigned = ", ".join("{0} = excluded.{0}".format(name) for name in KEY_FIELDS)
+            values = [user_id] + [encrypt_value(current[name]) for name in KEY_FIELDS]
             _execute(
                 conn,
-                """
-                INSERT INTO user_keys (user_id, pexels, pollinations, epidemic)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    pexels = excluded.pexels,
-                    pollinations = excluded.pollinations,
-                    epidemic = excluded.epidemic
-                """,
-                (
-                    user_id,
-                    encrypt_value(current["pexels"]),
-                    encrypt_value(current["pollinations"]),
-                    encrypt_value(current["epidemic"]),
-                ),
+                "INSERT INTO user_keys (user_id, {0}) VALUES (?, {1}) "
+                "ON CONFLICT (user_id) DO UPDATE SET {2}".format(cols, placeholders, assigned),
+                tuple(values),
             )
     return keys_public(user_id)
 
@@ -380,6 +395,7 @@ def apply_user_keys(user_id: int) -> dict:
         ("PEXELS_API_KEY", "pexels"),
         ("POLLINATIONS_API_KEY", "pollinations"),
         ("EPIDEMIC_API_KEY", "epidemic"),
+        ("OPENAI_API_KEY", "openai"),
     )
     for env_name, field in mapping:
         val = (keys.get(field) or "").strip().strip('"').strip("'")
