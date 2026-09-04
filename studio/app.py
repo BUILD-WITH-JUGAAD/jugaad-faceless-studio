@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -73,18 +74,61 @@ JOBS_DIR = ROOT / "jobs"
 SCRIPTS.mkdir(parents=True, exist_ok=True)
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="JUGAAD", version="0.1")
+_SHOW_DOCS = (os.getenv("JUGAAD_DOCS") or "").strip().lower() in ("1", "true", "yes")
+app = FastAPI(
+    title="JUGAAD",
+    version="0.1",
+    docs_url="/docs" if _SHOW_DOCS else None,
+    redoc_url="/redoc" if _SHOW_DOCS else None,
+    openapi_url="/openapi.json" if _SHOW_DOCS else None,
+)
 
 _lock = threading.Lock()
 _current = None
 _voice_preview_lock = threading.Lock()
+_rate_lock = threading.Lock()
+_rate_hits = {}
 _STATIC_EXT = {".css", ".js", ".map", ".ico", ".png", ".svg", ".jpg", ".jpeg", ".webp", ".woff", ".woff2"}
 _IMAGE_STYLES = {"comic", "cartoon", "anime"}
+_JOB_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+_MUSIC_MAX_BYTES = 12 * 1024 * 1024
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded[:64]
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit(request: Request, bucket: str, limit: int, window: int = 60) -> None:
+    key = "{0}:{1}:{2}".format(
+        bucket,
+        _client_ip(request),
+        request.session.get("user_id") or "anon",
+    )
+    now = time.time()
+    with _rate_lock:
+        hits = [stamp for stamp in _rate_hits.get(key, []) if now - stamp < window]
+        if len(hits) >= limit:
+            raise HTTPException(429, "Too many tries. Wait a minute.")
+        hits.append(now)
+        _rate_hits[key] = hits
+
+
+def _account_key_on(user_value: str, env_value: str) -> bool:
+    if (user_value or "").strip():
+        return True
+    if auth.isolate_account_keys():
+        return False
+    return bool((env_value or "").strip())
 
 
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
     path = request.url.path
+    if path in ("/docs", "/redoc", "/openapi.json") and not _SHOW_DOCS:
+        return JSONResponse({"detail": "Not found"}, status_code=404)
     if path.startswith("/api/auth") or path == "/api/health":
         return await call_next(request)
     suffix = Path(path).suffix.lower()
@@ -117,6 +161,7 @@ class AuthBody(BaseModel):
     email: str
     password: str
     name: str = ""
+    invite: str = ""
 
 
 def _require_user(request: Request) -> dict:
@@ -134,21 +179,32 @@ def _page(name: str) -> FileResponse:
 def _openai_for(user_id: int):
     extra = auth.apply_user_keys(user_id)
     prev = config.OPENAI_API_KEY
+    prev_env = os.environ.get("OPENAI_API_KEY")
     try:
         if extra.get("OPENAI_API_KEY"):
             config.OPENAI_API_KEY = extra["OPENAI_API_KEY"]
+            os.environ["OPENAI_API_KEY"] = extra["OPENAI_API_KEY"]
+        elif auth.isolate_account_keys():
+            config.OPENAI_API_KEY = ""
+            os.environ.pop("OPENAI_API_KEY", None)
         yield
     finally:
         config.OPENAI_API_KEY = prev
+        if prev_env is None:
+            os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            os.environ["OPENAI_API_KEY"] = prev_env
 
 
 @contextmanager
 def _epidemic_for(user_id: int):
     keys = auth.apply_user_keys(user_id)
     user_key = (keys.get("EPIDEMIC_API_KEY") or "").strip()
-    # Blank account key must not hide EPIDEMIC_API_KEY from .env.
     if user_key:
         with epidemic_api_key(user_key):
+            yield
+    elif auth.isolate_account_keys():
+        with epidemic_api_key(""):
             yield
     else:
         yield
@@ -169,21 +225,27 @@ def _job_owners() -> dict:
     return owners
 
 
+def _legacy_stems_ok(user_id: int) -> bool:
+    first = auth.first_user_id()
+    return first is not None and int(user_id) == int(first)
+
+
 def _user_stems(user_id: int) -> set:
-    """Cuts this account can see: theirs, plus anything made before login existed."""
+    """Cuts this account owns. Pre-account leftovers stay with the first user only."""
     visible = set()
     owners = _job_owners()
+    legacy = _legacy_stems_ok(user_id)
     for stem, uids in owners.items():
         claimed = {uid for uid in uids if uid is not None}
-        if user_id in claimed or not claimed:
+        if user_id in claimed or (legacy and not claimed):
             visible.add(stem)
     for path in config.OUTPUT_DIR.glob("*.mp4"):
         claimed = {uid for uid in owners.get(path.stem, set()) if uid is not None}
-        if user_id in claimed or not claimed:
+        if user_id in claimed or (legacy and not claimed):
             visible.add(path.stem)
     for stem in _disk_stems():
         claimed = {uid for uid in owners.get(stem, set()) if uid is not None}
-        if user_id in claimed or not claimed:
+        if user_id in claimed or (legacy and not claimed):
             visible.add(stem)
     return visible
 
@@ -322,6 +384,8 @@ def _slug(text: str, fallback: str) -> str:
 
 
 def _job_path(job_id: str) -> Path:
+    if not _JOB_ID_RE.fullmatch(job_id or ""):
+        raise HTTPException(404, "Unknown job")
     return JOBS_DIR / "{0}.json".format(job_id)
 
 
@@ -342,12 +406,41 @@ def _safe_name(name: str) -> str:
     return name
 
 
-def _ref_file(name: str) -> Path:
-    name = _safe_name(name)
-    path = config.REFS_DIR / name
-    if not path.exists() or not _inside(path, config.REFS_DIR):
-        raise HTTPException(404, "Reference image not found")
+def _ref_dir(user_id: int) -> Path:
+    path = config.REFS_DIR / str(int(user_id))
+    path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _ref_file(name: str, user_id: int) -> Path:
+    name = _safe_name(name)
+    folder = _ref_dir(user_id)
+    path = folder / name
+    if path.exists() and _inside(path, folder):
+        return path
+    if _legacy_stems_ok(user_id):
+        legacy = config.REFS_DIR / name
+        if legacy.is_file() and legacy.parent.resolve() == config.REFS_DIR.resolve():
+            return legacy
+    raise HTTPException(404, "Reference image not found")
+
+
+def _music_dir(user_id: int) -> Path:
+    path = config.MUSIC_DIR / "users" / str(int(user_id))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _music_file(name: str, user_id: int) -> Path:
+    name = _safe_name(name)
+    shared = config.MUSIC_DIR / name
+    if shared.is_file() and shared.parent.resolve() == config.MUSIC_DIR.resolve():
+        return shared
+    folder = _music_dir(user_id)
+    path = folder / name
+    if path.is_file() and _inside(path, folder):
+        return path
+    raise HTTPException(404, "Track not found")
 
 
 def _youtube_public(keys: dict, base_url: str = "") -> dict:
@@ -363,7 +456,7 @@ def _youtube_public(keys: dict, base_url: str = "") -> dict:
 
 def _options(user_id: int, base_url: str = "") -> dict:
     tracks = []
-    for path in list_music_tracks():
+    for path in list_music_tracks(user_id):
         tracks.append({
             "id": path.stem,
             "name": path.name,
@@ -406,15 +499,15 @@ def _options(user_id: int, base_url: str = "") -> dict:
         "library": library[:24],
         "busy": _current is not None,
         "epidemic": {
-            "enabled": bool(
-                (keys.get("epidemic") or "").strip()
-                or (getattr(config, "EPIDEMIC_API_KEY", "") or "").strip()
+            "enabled": _account_key_on(
+                keys.get("epidemic"),
+                getattr(config, "EPIDEMIC_API_KEY", ""),
             )
         },
         "openai": {
-            "enabled": bool(
-                (keys.get("openai") or "").strip()
-                or (getattr(config, "OPENAI_API_KEY", "") or "").strip()
+            "enabled": _account_key_on(
+                keys.get("openai"),
+                getattr(config, "OPENAI_API_KEY", ""),
             )
         },
         "youtube": _youtube_public(keys, base_url),
@@ -455,6 +548,8 @@ def api_health():
         "ok": True,
         "generate": auth.generate_enabled(),
         "postgres": auth.using_postgres(),
+        "register": auth.register_open(),
+        "invite": auth.invite_required(),
     }
 
 
@@ -488,6 +583,8 @@ def page_settings(request: Request):
 
 @app.post("/api/auth/register")
 def api_register(request: Request, body: AuthBody):
+    _rate_limit(request, "register", 5, 3600)
+    auth.assert_can_register(body.invite)
     user = auth.register_user(body.email, body.password, body.name)
     auth.login_session(request, user)
     return {"ok": True, "user": {"id": user["id"], "email": user["email"], "name": user["name"]}}
@@ -495,6 +592,7 @@ def api_register(request: Request, body: AuthBody):
 
 @app.post("/api/auth/login")
 def api_login(request: Request, body: AuthBody):
+    _rate_limit(request, "login", 10, 60)
     user = auth.authenticate(body.email, body.password)
     auth.login_session(request, user)
     return {"ok": True, "user": {"id": user["id"], "email": user["email"], "name": user["name"]}}
@@ -539,9 +637,9 @@ async def api_settings_put(request: Request):
 
 def _story_options(_user_id: int, keys: dict) -> dict:
     ollama = ollama_status()
-    openai_on = bool(
-        (keys.get("openai") or "").strip()
-        or (getattr(config, "OPENAI_API_KEY", "") or "").strip()
+    openai_on = _account_key_on(
+        keys.get("openai"),
+        getattr(config, "OPENAI_API_KEY", ""),
     )
     return {
         "default": "ollama",
@@ -566,6 +664,7 @@ def _story_options(_user_id: int, keys: dict) -> dict:
 
 @app.post("/api/story/expand")
 def api_story_expand(request: Request, body: StoryExpandBody):
+    _rate_limit(request, "story", 20, 60)
     user = _require_user(request)
     provider = (body.provider or "ollama").strip().lower()
     try:
@@ -844,6 +943,7 @@ def api_job(request: Request, job_id: str):
 @app.post("/api/generate")
 def api_generate(request: Request, body: GenerateBody):
     global _current
+    _rate_limit(request, "generate", 8, 60)
     user = _require_user(request)
     if not auth.generate_enabled():
         raise HTTPException(
@@ -903,6 +1003,7 @@ def api_generate(request: Request, body: GenerateBody):
 
 @app.post("/api/images/generate")
 def api_images_generate(request: Request, body: ImageBody):
+    _rate_limit(request, "images", 10, 60)
     global _current
     user = _require_user(request)
     prompt = (body.prompt or "").strip()
@@ -975,8 +1076,10 @@ def _run_image_job(job_id: str) -> None:
         extra = auth.apply_user_keys(int(user_id)) if user_id else {}
         if extra.get("POLLINATIONS_API_KEY"):
             config.POLLINATIONS_API_KEY = extra["POLLINATIONS_API_KEY"]
-        if job.get("ref"):
-            config.REFERENCE_IMAGE = str(_ref_file(job["ref"]))
+        elif auth.isolate_account_keys():
+            config.POLLINATIONS_API_KEY = ""
+        if job.get("ref") and user_id:
+            config.REFERENCE_IMAGE = str(_ref_file(job["ref"], int(user_id)))
         config.REFERENCE_ROLE = (job.get("ref_role") or "creature").strip().lower() or "creature"
         try:
             config.apply_aspect_ratio(job.get("size") or "9:16")
@@ -1087,18 +1190,25 @@ def _run_job(job_id: str) -> None:
     job["status"] = "running"
     _write_job(job)
     script = _write_script(job)
+    user_id = job.get("user_id")
+    music = job["music"]
+    if user_id and music not in ("random", "off", "", None):
+        for path in list_music_tracks(int(user_id)):
+            if path.stem == music or path.name == music:
+                music = str(path)
+                break
     cmd = [
         _pipeline_python(), "-u", str(ROOT / "main.py"),
         str(script),
         job["stem"],
         "model={0}".format(job["model"]),
-        "music={0}".format(job["music"]),
+        "music={0}".format(music),
         "voice={0}".format(resolve_voice(job.get("voice"))),
         "size={0}".format(job["size"]),
         "max={0}".format(job.get("seconds") if job.get("seconds") is not None else 180),
     ]
-    if job.get("ref"):
-        cmd.append("ref={0}".format(_ref_file(job["ref"])))
+    if job.get("ref") and user_id:
+        cmd.append("ref={0}".format(_ref_file(job["ref"], int(user_id))))
     if job.get("ref_role"):
         cmd.append("ref_role={0}".format(job["ref_role"]))
     if job.get("board"):
@@ -1114,7 +1224,9 @@ def _run_job(job_id: str) -> None:
     env["TOKENIZERS_PARALLELISM"] = "false"
     if sys.platform == "darwin":
         env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
-    user_id = job.get("user_id")
+    if auth.isolate_account_keys():
+        for name in auth.ACCOUNT_KEY_ENV:
+            env.pop(name, None)
     if user_id:
         env.update(auth.apply_user_keys(int(user_id)))
     try:
@@ -1490,6 +1602,7 @@ def api_voice_preview(request: Request, voice_id: str):
 
 @app.get("/api/epidemic/tracks")
 def api_epidemic_tracks(request: Request, q: str = "", offset: int = 0, limit: int = 24, kind: str = "music"):
+    _rate_limit(request, "epidemic", 40, 60)
     user = _require_user(request)
     try:
         with _epidemic_for(user["id"]):
@@ -1500,13 +1613,14 @@ def api_epidemic_tracks(request: Request, q: str = "", offset: int = 0, limit: i
 
 @app.get("/api/epidemic/preview/{track_id}")
 def api_epidemic_preview(request: Request, track_id: str, kind: str = "music"):
+    _rate_limit(request, "epidemic", 40, 60)
     user = _require_user(request)
     try:
         with _epidemic_for(user["id"]):
             mode, payload = epidemic_open_preview(track_id, kind=kind)
             if mode == "file":
                 return FileResponse(str(payload), media_type="audio/mpeg")
-            upstream = epidemic_open_media(payload)
+            upstream = epidemic_open_media(payload, trusted=True)
             source = upstream.url or payload
             return _epidemic_stream(upstream, source)
     except EpidemicError as exc:
@@ -1514,11 +1628,12 @@ def api_epidemic_preview(request: Request, track_id: str, kind: str = "music"):
 
 
 @app.get("/api/epidemic/hls")
-def api_epidemic_hls(request: Request, u: str = ""):
+def api_epidemic_hls(request: Request, u: str = "", s: str = ""):
+    _rate_limit(request, "epidemic", 40, 60)
     user = _require_user(request)
     try:
         with _epidemic_for(user["id"]):
-            upstream = epidemic_open_media(u)
+            upstream = epidemic_open_media(u, sig=s)
             return _epidemic_stream(upstream, u or upstream.url or "")
     except EpidemicError as exc:
         _epidemic_http(exc)
@@ -1526,6 +1641,7 @@ def api_epidemic_hls(request: Request, u: str = ""):
 
 @app.post("/api/epidemic/import")
 def api_epidemic_import(request: Request, body: EpidemicImportBody):
+    _rate_limit(request, "epidemic", 20, 60)
     user = _require_user(request)
     try:
         with _epidemic_for(user["id"]):
@@ -1536,7 +1652,7 @@ def api_epidemic_import(request: Request, body: EpidemicImportBody):
 
 @app.post("/api/ref/upload")
 async def api_ref_upload(request: Request, file: UploadFile = File(...)):
-    _require_user(request)
+    user = _require_user(request)
     original = _safe_name(file.filename or "ref.jpg")
     ext = Path(original).suffix.lower()
     if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
@@ -1545,10 +1661,11 @@ async def api_ref_upload(request: Request, file: UploadFile = File(...)):
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(400, "Keep the reference under 8 MB.")
     stem = re.sub(r"[^a-zA-Z0-9._-]+", "_", Path(original).stem).strip("._") or "ref"
-    dest = config.REFS_DIR / (stem + ".jpg")
+    folder = _ref_dir(user["id"])
+    dest = folder / (stem + ".jpg")
     n = 2
     while dest.exists():
-        dest = config.REFS_DIR / "{0}_{1}.jpg".format(stem, n)
+        dest = folder / "{0}_{1}.jpg".format(stem, n)
         n += 1
     from PIL import Image
     import io
@@ -1566,25 +1683,29 @@ async def api_ref_upload(request: Request, file: UploadFile = File(...)):
 
 @app.get("/media/ref/{name}")
 def media_ref(request: Request, name: str):
-    _require_user(request)
-    path = _ref_file(name)
+    user = _require_user(request)
+    path = _ref_file(name, user["id"])
     return FileResponse(str(path), media_type="image/jpeg")
 
 
 @app.post("/api/music/upload")
 async def api_music_upload(request: Request, file: UploadFile = File(...)):
-    _require_user(request)
+    user = _require_user(request)
     original = _safe_name(file.filename or "track.mp3")
     ext = Path(original).suffix.lower()
     if ext not in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}:
         raise HTTPException(400, "Use an audio file (.mp3, .wav, .m4a)")
+    raw = await file.read()
+    if len(raw) > _MUSIC_MAX_BYTES:
+        raise HTTPException(400, "Keep the track under 12 MB.")
     stem = re.sub(r"[^a-zA-Z0-9._-]+", "_", Path(original).stem).strip("._") or "track"
-    dest = config.MUSIC_DIR / (stem + ext)
+    folder = _music_dir(user["id"])
+    dest = folder / (stem + ext)
     n = 2
     while dest.exists():
-        dest = config.MUSIC_DIR / "{0}_{1}{2}".format(stem, n, ext)
+        dest = folder / "{0}_{1}{2}".format(stem, n, ext)
         n += 1
-    dest.write_bytes(await file.read())
+    dest.write_bytes(raw)
     return {
         "ok": True,
         "id": dest.stem,
@@ -1595,11 +1716,8 @@ async def api_music_upload(request: Request, file: UploadFile = File(...)):
 
 @app.get("/media/music/{name}")
 def media_music(request: Request, name: str):
-    _require_user(request)
-    name = _safe_name(name)
-    path = config.MUSIC_DIR / name
-    if not path.exists() or path.parent.resolve() != config.MUSIC_DIR.resolve():
-        raise HTTPException(404, "Track not found")
+    user = _require_user(request)
+    path = _music_file(name, user["id"])
     return FileResponse(str(path), media_type="audio/mpeg")
 
 
@@ -1625,7 +1743,7 @@ def media_output(request: Request, name: str):
     if not _user_owns_stem(user["id"], stem):
         raise HTTPException(404, "Video not found")
     path = config.OUTPUT_DIR / name
-    if not path.exists():
+    if not path.exists() or not _inside(path, config.OUTPUT_DIR):
         raise HTTPException(404, "Video not found")
     return FileResponse(str(path), media_type="video/mp4")
 

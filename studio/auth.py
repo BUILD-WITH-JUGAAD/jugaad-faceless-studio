@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -13,6 +14,8 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+
+from cryptography.fernet import Fernet, InvalidToken
 
 from fastapi import HTTPException, Request
 
@@ -82,6 +85,50 @@ def _ensure_secret() -> str:
 
 SECRET = _ensure_secret()
 
+# Paid / quota keys — never inherit process .env on a multi-user host.
+ACCOUNT_KEY_ENV = (
+    "PEXELS_API_KEY",
+    "POLLINATIONS_API_KEY",
+    "EPIDEMIC_API_KEY",
+    "OPENAI_API_KEY",
+)
+
+
+def isolate_account_keys() -> bool:
+    """Hosted Render: each account must bring its own keys."""
+    return bool(os.getenv("RENDER"))
+
+
+def register_open() -> bool:
+    flag = (os.getenv("JUGAAD_DISABLE_REGISTER") or "").strip().lower()
+    if flag in ("1", "true", "yes"):
+        return False
+    return True
+
+
+def invite_secret() -> str:
+    return (os.getenv("JUGAAD_INVITE") or "").strip()
+
+
+def invite_required() -> bool:
+    return bool(invite_secret())
+
+
+def assert_can_register(invite: str = "") -> None:
+    if not register_open():
+        raise HTTPException(403, "New accounts are closed on this host.")
+    needed = invite_secret()
+    if not needed:
+        return
+    given = (invite or "").strip()
+    if not given or len(given) != len(needed) or not hmac.compare_digest(needed, given):
+        raise HTTPException(403, "That invite code is wrong.")
+
+
+def _fernet() -> Fernet:
+    raw = hashlib.sha256(("jugaad-fernet:" + SECRET).encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(raw))
+
 
 def _key_material() -> bytes:
     return hashlib.sha256(("jugaad-keys:" + SECRET).encode("utf-8")).digest()
@@ -91,15 +138,10 @@ def encrypt_value(text: str) -> str:
     raw = (text or "").encode("utf-8")
     if not raw:
         return ""
-    key = _key_material()
-    token = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
-    mac = hmac.new(key, token, hashlib.sha256).digest()
-    return (mac + token).hex()
+    return "fernet:" + _fernet().encrypt(raw).decode("ascii")
 
 
-def decrypt_value(blob: str) -> str:
-    if not blob:
-        return ""
+def _decrypt_xor(blob: str) -> str:
     try:
         data = bytes.fromhex(blob)
     except ValueError:
@@ -110,7 +152,21 @@ def decrypt_value(blob: str) -> str:
     mac, token = data[:32], data[32:]
     if not hmac.compare_digest(mac, hmac.new(key, token, hashlib.sha256).digest()):
         return ""
-    return bytes(b ^ key[i % len(key)] for i, b in enumerate(token)).decode("utf-8")
+    try:
+        return bytes(b ^ key[i % len(key)] for i, b in enumerate(token)).decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+
+
+def decrypt_value(blob: str) -> str:
+    if not blob:
+        return ""
+    if blob.startswith("fernet:"):
+        try:
+            return _fernet().decrypt(blob[7:].encode("ascii")).decode("utf-8")
+        except (InvalidToken, ValueError, UnicodeDecodeError):
+            return ""
+    return _decrypt_xor(blob)
 
 
 def hash_password(password: str) -> str:
@@ -250,6 +306,14 @@ def _ensure_key_columns(conn) -> None:
 
 
 init_db()
+
+
+def first_user_id():
+    with _db() as conn:
+        row = _execute(conn, "SELECT id FROM users ORDER BY id ASC LIMIT 1").fetchone()
+    if not row:
+        return None
+    return int(row["id"])
 
 
 def _row_user(row) -> dict:

@@ -9,6 +9,9 @@ Docs: https://developers.epidemicsite.com/docs/getting-started/
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 import re
 import threading
 from contextlib import contextmanager
@@ -27,7 +30,6 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_-]{4,80}$")
 _MEDIA_HOSTS = (
     "epidemicsound.com",
     "cloudfront.net",
-    "amazonaws.com",
 )
 
 
@@ -284,6 +286,32 @@ def allowed_media_url(url: str) -> bool:
     return any(host == domain or host.endswith("." + domain) for domain in _MEDIA_HOSTS)
 
 
+def _hls_secret() -> bytes:
+    try:
+        from studio import auth
+
+        material = auth.SECRET
+    except Exception:
+        material = (os.getenv("JUGAAD_SECRET") or os.getenv("SECRET_KEY") or "").strip()
+    return hashlib.sha256(("jugaad-hls:" + (material or "")).encode("utf-8")).digest()
+
+
+def media_sig(url: str) -> str:
+    return hmac.new(_hls_secret(), (url or "").encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
+def check_media_sig(url: str, sig: str) -> bool:
+    expected = media_sig(url)
+    given = (sig or "").strip()
+    if not given or len(given) != len(expected):
+        return False
+    return hmac.compare_digest(expected, given)
+
+
+def proxy_media_path(url: str) -> str:
+    return "/api/epidemic/hls?u={0}&s={1}".format(quote(url, safe=""), media_sig(url))
+
+
 def rewrite_hls(body: str, base_url: str) -> str:
     """Point playlist URIs at our same-origin proxy so the browser can play HLS."""
     lines = []
@@ -292,7 +320,7 @@ def rewrite_hls(body: str, base_url: str) -> str:
         if stripped and not stripped.startswith("#"):
             abs_url = urljoin(base_url, stripped)
             if allowed_media_url(abs_url):
-                lines.append("/api/epidemic/hls?u=" + quote(abs_url, safe=""))
+                lines.append(proxy_media_path(abs_url))
             else:
                 lines.append(raw)
         else:
@@ -359,8 +387,10 @@ def open_preview(track_id: str, kind: str = "music"):
     return "url", preview_url(track_id, kind)
 
 
-def open_media(url: str):
+def open_media(url: str, sig: str = "", trusted: bool = False):
     if not allowed_media_url(url):
+        raise EpidemicError("Bad preview url", 400)
+    if not trusted and not check_media_sig(url, sig):
         raise EpidemicError("Bad preview url", 400)
     try:
         resp = requests.get(url, stream=True, timeout=30)

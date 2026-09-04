@@ -36,6 +36,10 @@
           <span>Password</span>
           <input id="password" type="password" required minlength="8" autocomplete="current-password" />
         </label>
+        <label class="field" id="inviteField" hidden>
+          <span>Invite code</span>
+          <input id="invite" type="text" autocomplete="off" spellcheck="false" />
+        </label>
         <p class="auth-error" id="authError" hidden></p>
         <button class="go auth-go" type="submit" id="authSubmit">Sign in</button>
       </form>
@@ -44,6 +48,6 @@
       </p>
     </div>
   </main>
-  <script src="/login.js?v=4"></script>
+  <script src="/login.js?v=5"></script>
 </body>
 </html>

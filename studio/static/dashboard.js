@@ -199,11 +199,20 @@ document.addEventListener("keydown", (e) => {
     const info = keys[item.id] || {};
     const el = document.createElement("article");
     el.className = "deck key-card" + (info.set ? " is-on" : "");
-    el.innerHTML =
-      "<p class='dialog-kicker'>" + item.label + "</p>" +
-      "<h2>" + (info.set ? "Ready" : "Missing") + "</h2>" +
-      "<p>" + (info.set ? info.hint : item.hint) + "</p>" +
-      "<a href='/settings'>" + (info.set ? "Update key" : "Add key") + "</a>";
+    const kicker = document.createElement("p");
+    kicker.className = "dialog-kicker";
+    kicker.textContent = item.label;
+    const heading = document.createElement("h2");
+    heading.textContent = info.set ? "Ready" : "Missing";
+    const copy = document.createElement("p");
+    copy.textContent = info.set ? (info.hint || "") : item.hint;
+    const link = document.createElement("a");
+    link.href = "/settings";
+    link.textContent = info.set ? "Update key" : "Add key";
+    el.appendChild(kicker);
+    el.appendChild(heading);
+    el.appendChild(copy);
+    el.appendChild(link);
     wrap.appendChild(el);
   });
 

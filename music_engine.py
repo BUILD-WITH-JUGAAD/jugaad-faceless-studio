@@ -15,13 +15,21 @@ import config
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
 
 
-def list_music_tracks() -> list:
+def list_music_tracks(user_id=None) -> list:
     folder = Path(getattr(config, "MUSIC_DIR", config.ASSETS / "background_music"))
     folder.mkdir(parents=True, exist_ok=True)
-    return sorted(
+    tracks = [
         p for p in folder.iterdir()
         if p.is_file() and p.suffix.lower() in _AUDIO_EXTS
-    )
+    ]
+    if user_id is not None:
+        extra = folder / "users" / str(int(user_id))
+        if extra.is_dir():
+            tracks.extend(
+                p for p in extra.iterdir()
+                if p.is_file() and p.suffix.lower() in _AUDIO_EXTS
+            )
+    return sorted(tracks)
 
 
 def _norm(text: str) -> str:
@@ -29,7 +37,12 @@ def _norm(text: str) -> str:
 
 
 def resolve_track(name: str) -> Path:
-    """Match a filename, stem, or unique substring against tracks in MUSIC_DIR."""
+    """Match a filename, stem, or unique substring against shared beds.
+
+    Per-account uploads live under MUSIC_DIR/users/{id}/. Pass those as an
+    existing file path. This lookup never walks other users' folders —
+    pick_background_music has no user context.
+    """
     requested = (name or "").strip()
     if not requested:
         raise ValueError("Empty music track name")
@@ -39,8 +52,8 @@ def resolve_track(name: str) -> Path:
         return raw.resolve()
 
     folder = Path(getattr(config, "MUSIC_DIR", config.ASSETS / "background_music"))
-    direct = folder / requested
-    if direct.is_file():
+    direct = (folder / requested).resolve()
+    if direct.is_file() and direct.parent == folder.resolve():
         return direct
 
     tracks = list_music_tracks()
