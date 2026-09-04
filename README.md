@@ -1,173 +1,357 @@
-# Faceless Horror Reel Pipeline — 100% Free, Self-Hosted
+# JUGAAD Faceless Studio
 
-Turns a script into a captioned, narrated, vertical video automatically.
-No subscriptions, no watermarks, no usage caps you don't control.
+Write a prompt, pick a look, and render a captioned faceless video on your machine — narration, captions, b-roll or illustrated stills, and a music bed. No subscriptions, no watermarks, no usage caps you do not control.
 
-## What's free vs. what needs a (free) key
+**JUGAAD** (Hindi/Nepali): the art of turning limited resources into a clever solution.
+
+![JUGAAD Faceless Studio — Video tab](docs/studio.png)
+
+## What you get
+
+- **Studio** at [http://127.0.0.1:8787](http://127.0.0.1:8787) — story, title, setting, model, voice, music, ratio, and a library
+- **Video** — live Pexels stock or comic / cartoon / anime stills with camera motion
+- **Images** — still boards from a visual prompt (same illustrated models)
+- **Write with AI** — Ollama locally (free) or OpenAI from Settings
+- Local **Coqui TTS** + **Whisper** captions
+- Delete a cut and the related audio, captions, b-roll, stills, script, and job files go with it
+
+The hosted beta keeps accounts and keys. Video generate still runs here (`python studio.py`).
+
+## What's free vs. what needs a key
 
 | Component | Cost | Notes |
 |---|---|---|
-| Narration (Coqui TTS) | Free, local | Downloads a model once (~150-300MB), then runs forever offline |
-| Captions (Whisper) | Free, local | Same — one-time model download, then fully offline |
-| Comic / 2D / anime stills | Free | Pollinations image API, no key required |
-| Live b-roll (Pexels) | Free API key | Only needed when `VIDEO_TYPE = "live"` |
-| Video assembly (moviepy/ffmpeg) | Free, local | — |
+| Studio + assembly (moviepy / ffmpeg) | Free, local | — |
+| Narration (Coqui TTS) | Free, local | One model download, then offline |
+| Captions (Whisper) | Free, local | Same |
+| Write with AI (Ollama) | Free, local | e.g. `gemma3:4b` |
+| Comic / cartoon / anime stills | Free | Pollinations, no key required |
+| Live b-roll (Pexels) | Free API key | [pexels.com/api](https://www.pexels.com/api/) |
+| OpenAI story expand | Optional paid key | Only if you skip Ollama |
+| Epidemic Sound import | Optional partner key | Music / SFX into `assets/background_music/` |
+| AI video (`ai_video`) | Paid Pollinations | Optional; not the default studio models |
 
-Total ongoing cost: **$0**. The only thing to grab is a free Pexels API key.
+---
+
+## What you need before you start
+
+Nothing in this list is a cloud account except the optional keys. Generate happens on **your** machine.
+
+### Machine
+
+- A laptop or desktop you can leave running for 5–20 minutes (first render is slower).
+- **Python 3.9–3.11**. This repo is developed on **3.9**. Python 3.12+ often breaks Coqui TTS / `bangla`.
+- Disk: a few GB free. Coqui VITS + Whisper `small` download once and stay in your user cache.
+- Internet for the first model download, Pexels (live), and Pollinations (illustrated). After that, TTS and Whisper work offline.
+
+### Always install (the app will not render without these)
+
+| Piece | Why | How you know it is missing |
+|---|---|---|
+| Python venv + `pip install -r requirements.txt` | Studio, TTS, Whisper, MoviePy | `ModuleNotFoundError` when you start studio |
+| **ffmpeg** | MoviePy writes the `.mp4` | Render log: `ffmpeg` / `FileNotFoundError` / assemble dies |
+| **espeak-ng** | Coqui VITS phonemes | TTS crash, or `espeak` / `phonemizer` in the log |
+
+### Optional — only if you use that feature
+
+| Piece | Needed for | Skip it if… |
+|---|---|---|
+| **Pexels** free API key | **Live b-roll** | You only use 2D comic / cartoon / anime |
+| **Ollama** + a pulled model | **Write with AI** (free) | You write the story yourself, or use OpenAI |
+| **OpenAI** key | Write with AI without Ollama | Ollama is running, or you type the story |
+| **Pollinations** key | Busy free stills pool, or paid `ai_video` | Comic stills usually work without it |
+| **Epidemic Sound** partner key | Search/import music & SFX in Studio | You drop `.mp3` files in `assets/background_music/` |
+| **Google OAuth** (YouTube Data API) | Upload / edit / delete from Studio | You upload the file yourself |
+| Music files in `assets/background_music/` | A bed under the voice | You pick **No music** — render still succeeds |
+
+### Check the binaries (do this once)
+
+```bash
+python3 --version          # 3.9.x – 3.11.x
+which ffmpeg && ffmpeg -version | head -n 1
+which espeak-ng || which espeak
+```
+
+If `ffmpeg` or `espeak-ng` prints nothing, install them before `pip install`.
+
+---
 
 ## Setup
 
 ```bash
-# 1. Create a virtual environment
-python -m venv venv
+git clone https://github.com/a-M-i-T/jugaad-faceless-studio.git
+cd jugaad-faceless-studio
+
+python3 -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 
-# 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Install system tools
-#    espeak-ng: Coqui VITS (tts_models/en/vctk/vits) needs it for phonemes
-#    ffmpeg:    moviepy needs it to assemble video
-#    Mac:   brew install espeak-ng ffmpeg
-#    Linux: sudo apt install espeak-ng ffmpeg
-#    Windows: install espeak-ng and ffmpeg, then add both to PATH
-
-# 4. Get a free Pexels API key: https://www.pexels.com/api/
-#    Create a .env file in this folder with:
-echo "PEXELS_API_KEY=your_key_here" > .env
+# Mac:   brew install espeak-ng ffmpeg
+# Linux: sudo apt install espeak-ng ffmpeg
+# Windows: install both and add them to PATH
 ```
 
-## Studio (JUGAAD)
+Coqui VITS needs **espeak-ng**. Moviepy needs **ffmpeg**. Always `source venv/bin/activate` in the same terminal you use to start studio.
 
-Open a ChatGPT-style desk in the browser: write the story, pick model / score / frame, watch the cut.
+### Keys (`.env` and Settings)
+
+Create a `.env` in this folder (never commit it):
 
 ```bash
-pip install -r requirements.txt
+PEXELS_API_KEY=your_key_here
+# optional
+# OPENAI_API_KEY=
+# OPENAI_MODEL=gpt-4o-mini
+# OLLAMA_HOST=http://127.0.0.1:11434
+# OLLAMA_MODEL=gemma3:4b
+# POLLINATIONS_API_KEY=
+# EPIDEMIC_API_KEY=
+# GOOGLE_CLIENT_ID=
+# GOOGLE_CLIENT_SECRET=
+```
+
+You can also paste the same keys in **Settings** after you sign in. Account keys win for that user. A blank Settings field keeps whatever is already saved; `.env` is the fallback.
+
+**Minimum to generate a video**
+
+- Comic / cartoon / anime: no keys. Install Python + ffmpeg + espeak-ng, then generate.
+- Live b-roll: add `PEXELS_API_KEY` (or paste it in Settings) **and restart studio** if you only put it in `.env`.
+
+### Optional: Write with AI (Ollama)
+
+1. Install [Ollama](https://ollama.com) and start the app (it listens on `http://127.0.0.1:11434`).
+2. Pull the default model (fits a 16 GB Mac):
+
+```bash
+ollama pull gemma3:4b
+curl -s http://127.0.0.1:11434/api/tags
+```
+
+If that `curl` fails, Ollama is not running. Studio will say so when you click **Write with AI**.
+
+---
+
+## Run the studio and generate
+
+```bash
+source venv/bin/activate
 python studio.py
 # → http://127.0.0.1:8787
 ```
 
-**JUGAAD** is the working name (a clever local hack). The Images tab is a placeholder for later stills.
+Use port **8787** only (YouTube OAuth redirect is wired to it). Uvicorn does **not** hot-reload — after you change Python, stop the process and run `python studio.py` again.
 
-## Run it
+### First time in the browser
+
+1. Open [http://127.0.0.1:8787](http://127.0.0.1:8787). You get a local sign-in page. Create an account (any email + password ≥ 8 characters). It is stored in `studio/data/jugaad.db` on this machine, not on the hosted beta.
+2. Open **Settings**. Paste a Pexels key if you want live stock. Save. Optional: OpenAI, Epidemic, Google (YouTube).
+3. Open **Studio → Video**.
+
+### Generate a video (happy path)
+
+1. Type a short idea **or** click **Write with AI**, then edit the story. Generate needs a **fuller story** — at least a few sentences (8+ words). A one-line prompt alone is rejected.
+2. Title, setting, and **visual search keys** fill from the story (or from Write with AI). Edit them. Keys are what Pexels / stills search for (`Tokyo Japan empty street night rain`).
+3. Pick a look:
+   - **Live b-roll** — needs Pexels
+   - **2D comic / Cartoon / Anime** — Pollinations stills, no Pexels
+4. Optional: drop a **reference photo**. Role **Ghost / creature** (default) locks the monster only; people follow he/she in the story. **Character** locks every face to the photo.
+5. Optional: generate stills first on the **Images** tab, then **Use stills in reel** so Video reuses that board (no redraw).
+6. Pick voice, music (or **No music**), frame (9:16 for Shorts), and length.
+7. **Generate video**. Keep the tab open. Watch the log in the UI.
+
+**First run is slow.** Coqui downloads VITS; Whisper downloads `small`. After that, those steps are local.
+
+When it finishes, the cut is in the library and on disk as `output/{title}.mp4`.
+
+**Images** is the same desk for still boards. It wants a visual prompt, not a voiceover script.
+
+### Smoke-test without the browser
+
+If the UI is confusing, prove the pipeline in the terminal first:
+
+```bash
+source venv/bin/activate
+# illustrated — no Pexels key
+python main.py scripts/popobawa.py model=comic music=off
+# live stock — needs PEXELS_API_KEY
+python main.py scripts/popobawa.py model=live
+```
+
+A good run ends with a file in `output/`. If this fails, the Studio log will fail the same way — fix the terminal error first.
+
+### Publish to YouTube
+
+1. In [Google Cloud](https://console.cloud.google.com/apis/library/youtube.googleapis.com) enable **YouTube Data API v3**
+2. Create an OAuth client (Web application)
+3. Add redirect URI `http://127.0.0.1:8787/youtube/callback` (must match exactly)
+4. Paste the client id and secret in **Settings**, save, then **Connect YouTube**
+5. In the library, click **YT** on a cut. Default visibility is **unlisted**
+6. Manage uploads from **Studio** or **Dashboard** (edit title / description / privacy, open, delete)
+
+Tokens stay encrypted on the account. The browser never sees the client secret.
+
+If list / edit / delete fails after an old connect, click **Reconnect** in Settings (the app now asks for the full YouTube manage scope, not upload-only).
+
+---
+
+## When something is missing — how to debug
+
+Work top to bottom. Most failures are a missing binary, a missing key for **that** model, or studio not restarted after `.env` changed.
+
+### 1. Confirm studio is the local one
+
+```bash
+curl -s http://127.0.0.1:8787/api/health
+# {"ok":true,"generate":true,"postgres":false}
+```
+
+| You see | Meaning |
+|---|---|
+| Connection refused | Studio is not running. `python studio.py` from the project folder with the venv on. |
+| `"generate":false` | You are on the hosted beta, or `JUGAAD_DISABLE_GENERATE=1`. Generate only works with local `python studio.py`. |
+| Browser opens a different host | You are not on `127.0.0.1:8787`. |
+
+### 2. Read the render log, not only the red banner
+
+In Studio, a failed job shows **Render failed (exit N). Check the log.** Scroll the log. The last `RuntimeError` / `FileNotFoundError` line is the real reason.
+
+Same log in the terminal if you ran `python main.py …`.
+
+| Log / UI message | What is missing | Fix |
+|---|---|---|
+| `No PEXELS_API_KEY set` | Pexels key | Get a key at [pexels.com/api](https://www.pexels.com/api/). Put it in `.env` **or** Settings. Restart studio if you used `.env`. Or switch the model to comic / cartoon / anime. |
+| `No Pexels clips found` | Key wrong, quota, or search too weird | Check the key in Settings. Soften visual keys (`empty street night rain`). Retry. |
+| `Ollama isn't running` | Ollama app / daemon | Start Ollama. `curl http://127.0.0.1:11434/api/tags`. Or type the story yourself. |
+| `Model gemma3:4b is not installed` | Pulled weights | `ollama pull gemma3:4b` (or set `OLLAMA_MODEL` to a model you already have). |
+| `Add an OpenAI key in Settings` | OpenAI provider selected, no key | Paste `OPENAI_API_KEY` in Settings, or switch Write with AI to Ollama. |
+| `OpenAI rejected that key` | Bad / revoked key | New key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys). |
+| `Write a fuller story` | Prompt too short | Write with AI, or paste a few sentences. Generate does not accept a one-liner. |
+| `espeak` / `phonemizer` / TTS dies on first audio | espeak-ng | `brew install espeak-ng` or `sudo apt install espeak-ng`. Confirm `which espeak-ng`. |
+| `ffmpeg` / MoviePy writer error | ffmpeg | `brew install ffmpeg`. Confirm `which ffmpeg`. |
+| `ModuleNotFoundError: TTS` / `whisper` / `moviepy` | venv or pip | `source venv/bin/activate` then `pip install -r requirements.txt`. |
+| `Failed to generate image` / Pollinations HTTP 422 | Free image API or reference blocked | Retry. Drop the reference or set role to **Style** / **Off**. Optional Pollinations key in Settings. |
+| `AI video needs POLLINATIONS_API_KEY` | Paid video model | Add a key, or do not use CLI `model=ai_video`. |
+| `Add your Epidemic Sound key` | Epidemic import | Settings → Epidemic, or drop files in `assets/background_music/`. SFX cues still leave pauses without a key. |
+| `Connect YouTube in Settings first` | No OAuth tokens | Settings → save Google client → Connect. |
+| `Save a Google client id and secret` | Missing OAuth app | Create a Web client; redirect `http://127.0.0.1:8787/youtube/callback`. |
+| YouTube list empty / cannot edit | Old upload-only token | Settings → **Reconnect**. |
+| `A render is already running` | One job at a time | Wait, or restart studio if a job is stuck. |
+| `Render crashed while loading TTS` / exit `-11` | OpenBLAS / Python.app on Mac | Run `python studio.py` from Terminal in this folder (uses `venv/bin/python3`). Click Generate again. |
+| First generate hangs for many minutes, no error | Downloading TTS or Whisper | Wait. Watch the terminal for download progress. Later runs reuse the cache. |
+| UI looks stale after a git pull | Browser cache | Hard-refresh. Studio HTML pins `app.js?v=…`. |
+| Keys in `.env` ignored | Process started before the file existed | Stop studio, save `.env`, start again. Or paste keys in Settings (no restart). |
+| Port already in use | Another studio on 8787 | Quit the old process. Do not pick a new port if you use YouTube OAuth. |
+
+### 3. Quick “what did I forget?” checklist
+
+```bash
+source venv/bin/activate
+python3 --version
+ffmpeg -version | head -n 1
+espeak-ng --version | head -n 1
+
+# .env loaded? (prints 1 or 0 — never prints the key)
+python -c "from dotenv import load_dotenv; load_dotenv(); import os; print('pexels', int(bool(os.getenv('PEXELS_API_KEY'))))"
+
+# Ollama (only if you use Write with AI)
+curl -s http://127.0.0.1:11434/api/tags | head
+
+# Studio process
+curl -s http://127.0.0.1:8787/api/health
+```
+
+`pexels 0` and you chose **Live b-roll** → that is the bug. Add the key or change model.
+
+### 4. Where files land (so you can see what ran)
+
+```
+assets/audio/              # TTS wavs
+assets/captions/           # Whisper word timings
+assets/broll/              # Pexels clips
+assets/stills/             # illustrated panels
+assets/refs/               # uploaded reference photos
+assets/background_music/   # your beds
+output/                    # finished mp4s
+scripts/studio/            # throwaway scripts the UI writes
+studio/data/               # local accounts, jobs, YouTube mapping (gitignored)
+```
+
+If `assets/audio/` never gets a wav, TTS failed (espeak / model download). If audio exists but there is no `output/*.mp4`, assembly or footage failed (ffmpeg / Pexels / Pollinations).
+
+---
+
+## CLI
+
+Same pipeline without the browser:
 
 ```bash
 python main.py scripts/popobawa.py
 python main.py scripts/popobawa.py model=live
-python main.py scripts/popobawa.py model=comic image_model=flux-anime
+python main.py scripts/popobawa.py model=comic
 python main.py scripts/popobawa.py model=live music=off
-python main.py scripts/popobawa.py music=horror_piano
+python main.py scripts/popobawa.py music=horror_piano voice=p326
 ```
 
-This generates `output/popobawa.mp4` — narrated, captioned, vertical, ready
-to upload as a YouTube Short (platform max **180 seconds**). CLI `model=`
-overrides the script's `VIDEO_TYPE`. The pipeline keeps the full story on
-the audio and captions; it does not cut off mid-sentence.
+Output lands in `output/{name}.mp4`. CLI `model=` overrides the script's `VIDEO_TYPE`. Default length cap is **180 seconds** (YouTube Shorts).
 
-Drop royalty-free `.mp3` / `.wav` files in `assets/background_music/`.
-Default is a random pick. Pin a track with `music=horror_piano` (filename
-or unique substring), skip with `music=off`, or set `MUSIC_TRACK` in
-`config.py` / `BACKGROUND_MUSIC` in the script.
+Drop royalty-free `.mp3` / `.wav` files in `assets/background_music/`. Default is a random pick. Pin a track with `music=horror_piano`, skip with `music=off`.
 
-## Visual models (`VIDEO_TYPE` / `model=`)
+## Visual models
 
-| Value | What you get |
+| Studio / CLI | What you get |
 |---|---|
-| `live` / `realistic_broll` / `pexels` | Real stock **video** from Pexels → `assets/broll/` |
-| `comic` / `2d_comic` | Illustrated stills + camera motion |
-| `cartoon` / `anime` | Other illustrated stills |
-| `ai_video` | Paid Pollinations video (`video_model=wan-fast`) |
+| Live b-roll · `live` | Real Pexels clips, timed to the story |
+| 2D comic · `comic` | Illustrated panels + camera motion |
+| Cartoon · `cartoon` | Flat cel-shaded stills |
+| Anime · `anime` | Clean line-art stills |
+| `ai_video` | Paid Pollinations motion (CLI) |
 
-Set the default in `config.py` (`VIDEO_TYPE`, `IMAGE_MODEL`, `AI_VIDEO_MODEL`),
-in the script (`VIDEO_TYPE = "2d_comic"`), or on the command line. CLI wins.
+Defaults live in `config.py` (`VIDEO_TYPE`, `IMAGE_MODEL`, `TTS_SPEAKER`). CLI wins.
 
-```python
-# config.py
-VIDEO_TYPE = "live"          # default when a script does not set VIDEO_TYPE
-IMAGE_MODEL = ""             # empty = flux-anime for comic; or flux / turbo
-AI_VIDEO_MODEL = "wan-fast"  # paid Pollinations video only
-MUSIC_ENABLED = True
-MUSIC_TRACK = ""             # empty = random; or "horror_piano.mp3"
-MUSIC_VOLUME = 0.12
-BROLL_CLIP_COUNT = 12         # live shorts: one Pexels clip per story beat
-```
+## Your own legend
 
-## How `assets/broll/` videos are created
-
-Those files are **not generated animation**. When `model=live` (or
-`VIDEO_TYPE = "live"` / `"realistic_broll"`):
-
-1. `broll_engine.py` builds short stock queries from each spoken beat
-2. It searches Pexels **without** a portrait filter (landscape is cropped to 9:16)
-3. Every result is scored against the beat using the clip's Pexels URL slug
-4. Tourism/gym/Tokyo/kayak/festival-lantern slugs are rejected
-
-Older files like `popobawa_part1_broll.mp4` are leftover downloads from
-the multi-part series. Same type of file: real Pexels stock, not AI video.
-You need a free `PEXELS_API_KEY` in `.env` for this path.
-
-## Adding your own legends
-
-Copy `scripts/popobawa.py`, rename it (e.g. `scripts/qallupilluk.py`), and
-replace the `PARTS` list with your own text and `broll_query` per part
-(scene descriptions for the illustrator, or Pexels search terms if live).
-
-Set the look at the top of the script (or pass `model=live` on the CLI):
+Copy `scripts/popobawa.py` or `scripts/qallupilluk.py` and replace `PARTS`:
 
 ```python
-VIDEO_TYPE = "2d_comic"       # or "live", "cartoon", "anime"
-CHARACTER_SEED = 1995         # same seed → related look across parts
+VIDEO_TYPE = "live"           # or comic / cartoon / anime
+CHARACTER_SEED = 1995
 CHARACTER_LOCK = "Popobawa, one-eyed bat-winged shetani, leathery wings"
+
+PARTS = [{
+    "text": "Your narration…",
+    "broll_query": "night village, lanterns, empty street",
+}]
 ```
 
-Each part can have `image_prompts` (several comic panels timed to the voiceover)
-and `broll_query` (Pexels, or location flavor for illustrated prompts).
+Then:
 
-If you omit `image_prompts`, the pipeline splits the narration into about
-`COMIC_PANELS` (default 5) scenes and draws one panel per scene.
-
-```python
-{"label": "PART 2", "text": "...", "broll_query": "...", "image_prompt": "..."}
-```
-
-Then run:
 ```bash
-python main.py scripts/qallupilluk.py
+python main.py scripts/your_legend.py
 ```
 
-## Tuning notes
+Studio writes throwaway scripts under `scripts/studio/` (gitignored). Deleting the cut in the library removes those, plus audio, captions, b-roll, stills, and the job file. Keep the hand-written files in `scripts/`.
 
-- **Voice**: `config.py` → `TTS_SPEAKER`. Coqui's VCTK model has 100+ speaker
-  IDs (p225-p376ish) — worth generating a few seconds of each to find your
-  channel's signature voice. List them with:
-  ```python
-  from TTS.api import TTS
-  print(TTS(model_name="tts_models/en/vctk/vits").speakers)
-  ```
-- **Caption pacing**: `words_per_chunk` in `main.py` — 2 words is fast/punchy
-  (good default for horror), try 3-4 for a calmer read.
-- **Whisper speed**: if generation feels slow on CPU, drop `WHISPER_MODEL` in
-  `config.py` from `"small"` to `"tiny"` (faster, slightly less accurate —
-  usually fine for short, clearly-spoken narration).
-- **First run is slow**: both TTS and Whisper download their models the
-  first time you run the pipeline. After that, everything runs offline.
+## Tuning
 
-## Folder structure
+- **Voice** — studio picker, or `voice=p326` / `TTS_SPEAKER` in `config.py`. Labels are by ear for this Coqui VCTK checkpoint (IDs do not match the official speaker sheet).
+- **Captions** — two words per chunk in `main.py` (punchy). Try 3–4 for a calmer read.
+- **Whisper** — `WHISPER_MODEL = "small"` in `config.py`. Use `"tiny"` if CPU is slow.
+- **First run** — TTS and Whisper download models once, then run offline.
+
+## Layout
 
 ```
-faceless_pipeline/
-├── config.py            # all settings in one place
-├── tts_engine.py         # local narration (Coqui TTS)
-├── captions_engine.py    # local word-timed captions (Whisper)
-├── visuals_engine.py     # comic / cartoon / anime stills, or live Pexels
-├── broll_engine.py       # Pexels stock video (used when VIDEO_TYPE is live)
-├── music_engine.py       # random bed from assets/background_music
-├── assemble_video.py     # combines everything with moviepy
-├── main.py               # orchestrator — run this
-├── scripts/
-│   └── popobawa.py       # example Short script
-├── assets/
-│   ├── background_music/ # drop .mp3/.wav here
-│   └── broll/            # downloaded Pexels clips
-└── output/                # final .mp4 files land here
+├── studio.py              # browser studio
+├── main.py                # CLI orchestrator
+├── config.py              # paths, voices, models, lengths
+├── scripts/               # hand-written stories (keep)
+├── scripts/studio/        # generated per cut (safe to delete)
+├── assets/background_music/
+├── assets/refs/           # uploaded reference photos
+└── output/                # finished mp4s
 ```
+
+## License
+
+Use and remix for your own channel. Do not commit `.env` or API keys.
