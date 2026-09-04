@@ -61,7 +61,8 @@ def captions_from_script(
     Whisper is only used for timing. Using Whisper's guessed words put
     'Papa Ball' on screen and dropped the ending when TTS/Whisper truncated.
     """
-    tokens = script_words(text)
+    from tts_engine import for_speech
+    tokens = script_words(for_speech(text))
     duration = max(float(duration), 0.1)
     if not tokens:
         return group_words_for_display(whisper_words or [], words_per_chunk)

@@ -412,6 +412,20 @@ def _safe_stem(title: str, track_id: str, kind: str) -> str:
     return "{0}_{1}".format(prefix, slug)
 
 
+def download_to(track_id: str, dest: Path, kind: str = "sfx") -> Path:
+    url = _download_link(track_id, kind)
+    try:
+        audio = requests.get(url, timeout=90)
+    except requests.RequestException as exc:
+        raise EpidemicError("Could not download the Epidemic sound") from exc
+    if audio.status_code >= 400 or not audio.content:
+        raise EpidemicError("Could not download the Epidemic sound", 502)
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(audio.content)
+    return dest
+
+
 def import_track(track_id: str, title: str = "", kind: str = "music") -> dict:
     kind = "sfx" if kind == "sfx" else "music"
     track_id = safe_id(track_id)

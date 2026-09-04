@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=12" />
+  <link rel="stylesheet" href="/app.css?v=21" />
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -59,6 +59,11 @@
               <input id="setting" type="text" placeholder="from the story — edit for Pexels" maxlength="80" />
             </label>
           </div>
+          <label class="field">
+            <span>Visual search keys</span>
+            <textarea id="visuals" class="visuals" rows="6" placeholder="One search phrase per line — Write with AI fills these, or paste from ChatGPT.&#10;Tokyo Japan empty street night rain&#10;Japanese schoolgirl walking alone at night"></textarea>
+            <p class="length-note">Drives anime, comic, cartoon stills and Pexels clips. Scene titles like “1. Opening” are ignored.</p>
+          </label>
         </div>
 
         <fieldset class="field deck">
@@ -70,6 +75,27 @@
         <fieldset class="field deck">
           <legend>Model</legend>
           <div class="cards" id="models"></div>
+        </fieldset>
+
+        <fieldset class="field deck">
+          <legend>Reference image</legend>
+          <div class="ref-drop" id="videoRefDrop">
+            <div class="ref-row">
+              <img id="videoRefThumb" class="ref-thumb" alt="" hidden />
+              <label class="upload-track">
+                <input id="videoRefFile" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden />
+                <span>Add photo</span>
+              </label>
+              <button type="button" class="upload-track" id="videoRefClear" hidden>Clear</button>
+            </div>
+            <p class="ref-hint">Or drop a photo here</p>
+          </div>
+          <div class="cards" id="videoRefRoles"></div>
+          <p class="length-note" id="videoRefNote">Ghost / creature is the default — the photo is the monster, not the narrator.</p>
+          <div class="music-actions">
+            <button type="button" class="upload-track" id="videoFlowOpen">Open in Google Flow</button>
+          </div>
+          <p class="length-note">Flow cannot take the photo in the URL. We download it and copy the prompt — drop the file into Ingredients.</p>
         </fieldset>
 
         <fieldset class="field deck">
@@ -111,14 +137,14 @@
           <span>Generate video</span>
           <kbd>↵</kbd>
         </button>
-        <p class="fine">Runs on this machine. First render is slow (TTS + Whisper + edit). Keep the tab open.</p>
+        <p class="fine" id="videoFine">Runs on this machine. First render is slow (TTS + Whisper + edit). Keep the tab open.</p>
       </div>
     </section>
 
     <section class="stage">
       <div class="monitor" id="monitor">
         <div class="frame" id="frame">
-          <video id="player" controls playsinline></video>
+          <video id="player" controls playsinline preload="metadata"></video>
           <div class="empty" id="empty">
             <p>Your cut lands here.</p>
             <span>Pick a ratio, write the story, hit generate.</span>
@@ -135,6 +161,14 @@
       <div class="library">
         <h2>Library</h2>
         <ul id="library"></ul>
+        <div class="yt-block">
+          <div class="yt-head">
+            <h2>YouTube</h2>
+            <button type="button" class="text-ai" id="youtubeRefresh">Refresh</button>
+          </div>
+          <p class="length-note" id="youtubeListNote">Connect YouTube in Settings to list your shorts here.</p>
+          <ul id="youtubeList"></ul>
+        </div>
         <div class="contact">
           <a href="mailto:buildwithjugaad@gmail.com">buildwithjugaad@gmail.com</a>
           <a href="https://github.com/buildwithjugaad/jugaad-faceless-studio/" target="_blank" rel="noopener noreferrer">github.com/buildwithjugaad/jugaad-faceless-studio</a>
@@ -149,25 +183,30 @@
         <div class="deck">
           <label class="field">
             <span class="field-head">
-              Story
+              Prompt
               <button type="button" class="text-ai" id="expandImageStory">Write with AI</button>
             </span>
-            <textarea id="imagePrompt" rows="5" placeholder="A short prompt is enough — e.g. Popobawa in Zanzibar. Write with AI, then edit before you generate stills."></textarea>
+            <textarea id="imagePrompt" rows="5" placeholder="A short prompt is enough — e.g. a lost cat in the rain. Write with AI optional."></textarea>
           </label>
           <div class="row2">
             <label class="field">
               <span>Title</span>
-              <input id="imageTitle" type="text" placeholder="from the story" maxlength="48" />
+              <input id="imageTitle" type="text" placeholder="from the prompt" maxlength="48" />
             </label>
             <label class="field">
               <span>Setting</span>
-              <input id="imageSetting" type="text" placeholder="from the story — edit for location" maxlength="80" />
+              <input id="imageSetting" type="text" placeholder="from the prompt — edit for location" maxlength="80" />
             </label>
           </div>
+          <label class="field">
+            <span>Visual search keys</span>
+            <textarea id="imageVisuals" class="visuals" rows="6" placeholder="One search phrase per line — Write with AI fills these, or paste from ChatGPT.&#10;Tokyo Japan empty street night rain&#10;Japanese schoolgirl walking alone at night"></textarea>
+            <p class="length-note">Each line is one still. Paste ChatGPT keys for accurate anime / 2D scenes.</p>
+          </label>
         </div>
 
         <fieldset class="field deck">
-          <legend>AI story engine</legend>
+          <legend>AI prompt helper</legend>
           <div class="cards" id="imageStoryEngines"></div>
           <p class="length-note" id="imageStoryEngineNote"></p>
         </fieldset>
@@ -175,6 +214,27 @@
         <fieldset class="field deck">
           <legend>Style</legend>
           <div class="cards" id="imageModels"></div>
+        </fieldset>
+
+        <fieldset class="field deck">
+          <legend>Reference image</legend>
+          <div class="ref-drop" id="imageRefDrop">
+            <div class="ref-row">
+              <img id="imageRefThumb" class="ref-thumb" alt="" hidden />
+              <label class="upload-track">
+                <input id="imageRefFile" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden />
+                <span>Add photo</span>
+              </label>
+              <button type="button" class="upload-track" id="imageRefClear" hidden>Clear</button>
+            </div>
+            <p class="ref-hint">Or drop a photo here</p>
+          </div>
+          <div class="cards" id="imageRefRoles"></div>
+          <p class="length-note" id="imageRefNote">Ghost / creature uses the photo only when a monster appears. People follow he/she in the story.</p>
+          <div class="music-actions">
+            <button type="button" class="upload-track" id="imageFlowOpen">Open in Google Flow</button>
+          </div>
+          <p class="length-note">Draw stills here first, then Use in reel — the video will time these panels instead of redrawing.</p>
         </fieldset>
 
         <fieldset class="field deck">
@@ -188,7 +248,7 @@
             <span>Count</span>
             <input id="imagePanels" type="number" min="3" max="16" step="1" placeholder="auto" />
           </label>
-          <p class="length-note">Leave blank to split the story automatically. 3–16 panels.</p>
+          <p class="length-note">Leave blank to split the prompt into panels. Visual keys override this when filled. 3–16.</p>
         </fieldset>
       </div>
 
@@ -197,7 +257,7 @@
           <span>Generate stills</span>
           <kbd>↵</kbd>
         </button>
-        <p class="fine" id="imageFine">Pollinations draws the panels. No TTS. Works on this host — keep the tab open.</p>
+        <p class="fine" id="imageFine">A short prompt is enough — no full story. Pollinations draws the panels. Keep the tab open.</p>
       </div>
     </section>
 
@@ -222,7 +282,7 @@
       <div class="library">
         <h2>Boards</h2>
         <ul id="imageLibrary"></ul>
-        <button type="button" class="upload-track" id="useBoard" hidden>Use in reel</button>
+        <button type="button" class="upload-track" id="useBoard" hidden>Use stills in reel</button>
       </div>
     </section>
   </main>
@@ -238,6 +298,52 @@
       <div class="dialog-actions">
         <button type="button" id="dialogCancel">Keep it</button>
         <button type="button" class="danger" id="dialogConfirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog" id="youtubeDialog" hidden>
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="youtubeTitle">
+      <p class="dialog-kicker">YouTube</p>
+      <h3 id="youtubeTitle">Upload this cut?</h3>
+      <p class="dialog-name" id="youtubeName"></p>
+      <div id="youtubeForm">
+        <label class="field">
+          <span>Title</span>
+          <input id="youtubeVideoTitle" type="text" maxlength="100" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Description</span>
+          <textarea id="youtubeDescription" rows="3" maxlength="5000" placeholder="optional"></textarea>
+        </label>
+        <label class="field">
+          <span>Visibility</span>
+          <select id="youtubePrivacy">
+            <option value="unlisted" selected>Unlisted — link only</option>
+            <option value="private">Private — only you</option>
+            <option value="public">Public</option>
+          </select>
+        </label>
+        <label class="check" id="youtubeShortsRow">
+          <input id="youtubeShorts" type="checkbox" checked />
+          <span>Tag as a Short (#Shorts)</span>
+        </label>
+        <label class="check" id="youtubeKidsRow">
+          <input id="youtubeKids" type="checkbox" />
+          <span>Made for kids</span>
+        </label>
+        <p class="dialog-copy" id="youtubeCopy">Uploads as unlisted unless you change it. Connect YouTube in Settings first.</p>
+        <div class="dialog-actions">
+          <button type="button" id="youtubeCancel">Cancel</button>
+          <button type="button" class="go" id="youtubeConfirm">Upload</button>
+        </div>
+      </div>
+      <div id="youtubeDone" hidden>
+        <p class="yt-ok" id="youtubeDoneCopy">Uploaded successfully.</p>
+        <a id="youtubeDoneLink" class="yt-done-link" href="#" target="_blank" rel="noopener noreferrer"></a>
+        <div class="dialog-actions">
+          <button type="button" class="go" id="youtubeDoneClose">Done</button>
+        </div>
       </div>
     </div>
   </div>
@@ -267,6 +373,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
-  <script src="/app.js?v=12"></script>
+  <script src="/app.js?v=21"></script>
 </body>
 </html>

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -26,6 +27,74 @@ _STYLE_SUFFIX = {
 }
 
 
+_MALE = re.compile(
+    r"\b(he|him|his|himself|boy|man|male|schoolboy|brother|son|lad|guy)\b",
+    re.I,
+)
+_FEMALE = re.compile(
+    r"\b(she|her|hers|herself|girl|woman|female|schoolgirl|sister|daughter|lady)\b",
+    re.I,
+)
+_CREATURE = re.compile(
+    r"\b(ghost|yokai|spirit|teke|demon|monster|shetani|creature|apparition|"
+    r"haunting|undead|ghoul|wraith|silhouette|popobawa|qallupilluk|yurei|"
+    r"crawling ghost)\b",
+    re.I,
+)
+
+
+def story_gender(text: str) -> str:
+    raw = text or ""
+    male = len(_MALE.findall(raw))
+    female = len(_FEMALE.findall(raw))
+    if male >= female + 2:
+        return "male"
+    if female >= male + 2:
+        return "female"
+    return ""
+
+
+def beat_gender(beat: str, story: str = "") -> str:
+    raw = beat or ""
+    if re.search(r"\b(schoolgirl|girl|woman)\b", raw, re.I) and not re.search(
+        r"\b(schoolboy|boy|man)\b", raw, re.I
+    ):
+        return "female"
+    if re.search(r"\b(schoolboy|boy|man)\b", raw, re.I):
+        return "male"
+    return story_gender(story)
+
+
+def beat_is_creature(beat: str) -> bool:
+    return bool(_CREATURE.search(beat or ""))
+
+
+def _ref_role() -> str:
+    role = (getattr(config, "REFERENCE_ROLE", "") or "creature").strip().lower()
+    if role in {"ghost", "monster", "creature"}:
+        return "creature"
+    if role in {"character", "face", "person", "human"}:
+        return "character"
+    if role in {"style", "mood"}:
+        return "style"
+    if role in {"off", "none", "0"}:
+        return "off"
+    return "creature"
+
+
+def use_ref_for_beat(beat: str) -> bool:
+    if not _ref_path().is_file():
+        return False
+    role = _ref_role()
+    if role == "off":
+        return False
+    if role == "style":
+        return False
+    if role == "character":
+        return True
+    return beat_is_creature(beat)
+
+
 def fetch_ai_image(
     prompt: str,
     out_path: Path,
@@ -34,6 +103,8 @@ def fetch_ai_image(
     seed: int = None,
     style: str = "comic",
     retries: int = 3,
+    use_ref: bool = None,
+    beat: str = "",
 ) -> Path:
     width = width or max(64, int(round(config.VIDEO_WIDTH * 768 / max(config.VIDEO_WIDTH, 1))))
     height = height or max(64, int(round(config.VIDEO_HEIGHT * 768 / max(config.VIDEO_WIDTH, 1))))
@@ -47,6 +118,15 @@ def fetch_ai_image(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     last_error = None
+    ref = _ref_path()
+    if use_ref is None:
+        use_ref = use_ref_for_beat(beat or prompt)
+    if ref.is_file() and use_ref:
+        try:
+            return _fetch_with_reference(prompt, out_path, ref, width, height, style)
+        except Exception as exc:
+            print("[image] reference failed ({0}); drawing without it".format(exc))
+            last_error = exc
     style_models = ("flux-anime", "turbo") if style in ("comic", "cartoon", "anime") else ("flux", "turbo")
     configured = getattr(config, "IMAGE_MODEL", "") or ""
     if configured.strip():
@@ -85,6 +165,75 @@ def fetch_ai_image(
             time.sleep(2 * attempt)
 
     raise RuntimeError(f"Failed to generate image for prompt {prompt!r}: {last_error}")
+
+
+def _ref_path(explicit=None) -> Path:
+    raw = explicit or getattr(config, "REFERENCE_IMAGE", "") or ""
+    path = Path(str(raw).strip()) if raw else Path()
+    return path if path.is_file() else Path()
+
+
+def _fetch_with_reference(prompt: str, out_path: Path, ref: Path, width: int, height: int, style: str) -> Path:
+    """Lock the still to an uploaded photo via Pollinations image edit (kontext)."""
+    suffix = _STYLE_SUFFIX.get(style, config.COMIC_STYLE_SUFFIX)
+    role = _ref_role()
+    if role == "creature":
+        lock = (
+            "The reference image is a ghost or creature only. Match that creature "
+            "when it appears. Do not put that face on a living person. "
+        )
+    elif role == "style":
+        lock = "Match only the art style and palette of the reference. Do not copy the face. "
+    else:
+        lock = "Keep the same human character, face, and outfit as the reference image. "
+    full_prompt = lock + "New scene: {0}{1}".format(prompt, suffix)
+    key = (config.POLLINATIONS_API_KEY or "").strip()
+    headers = {"User-Agent": "faceless-pipeline/1.0"}
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    mime = "image/jpeg"
+    if ref.suffix.lower() == ".png":
+        mime = "image/png"
+    elif ref.suffix.lower() in {".webp"}:
+        mime = "image/webp"
+    files = {"image": (ref.name, ref.read_bytes(), mime)}
+    data = {
+        "prompt": full_prompt[:1800],
+        "model": "kontext",
+        "size": "{0}x{1}".format(width, height),
+        "nologo": "true",
+    }
+    resp = requests.post(
+        "https://gen.pollinations.ai/v1/images/edits",
+        headers=headers,
+        files=files,
+        data=data,
+        timeout=180,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError("reference edit HTTP {0}: {1}".format(resp.status_code, (resp.text or "")[:200]))
+    ctype = resp.headers.get("content-type", "")
+    body = resp.content
+    if body.startswith(b"\xff\xd8") or "image/" in ctype:
+        out_path.write_bytes(body)
+    else:
+        payload = resp.json()
+        item = ((payload.get("data") or [{}])[0]) if isinstance(payload, dict) else {}
+        b64 = item.get("b64_json") or ""
+        url = item.get("url") or ""
+        if b64:
+            import base64
+            out_path.write_bytes(base64.b64decode(b64))
+        elif url:
+            got = requests.get(url, timeout=120, headers={"User-Agent": "faceless-pipeline/1.0"})
+            got.raise_for_status()
+            out_path.write_bytes(got.content)
+        else:
+            raise RuntimeError("reference edit returned no image")
+    with Image.open(out_path) as im:
+        im.verify()
+    print("[image] referenced '{0}...' -> {1}".format(prompt[:70], out_path.name))
+    return out_path
 
 
 def _sentences(text: str) -> list:
@@ -204,21 +353,62 @@ _CAMERA = (
 )
 
 
-def _panel_prompt(beat: str, setting: str, character_lock: str, index: int = 0) -> str:
+_MEDIUM = {
+    "anime": (
+        "2D anime still, Japanese animation, clean line art, cel shaded, "
+        "not a photograph, not live action, not 3D"
+    ),
+    "cartoon": (
+        "2D cartoon still, thick ink outlines, flat saturated color, "
+        "not a photograph, not 3D"
+    ),
+    "comic": (
+        "2D comic keyframe, graphic novel, cel shaded, "
+        "not a photograph, not 3D"
+    ),
+}
+
+
+def _panel_prompt(
+    beat: str,
+    setting: str,
+    character_lock: str,
+    index: int = 0,
+    style: str = "comic",
+    story: str = "",
+) -> str:
     angle = _CAMERA[index % len(_CAMERA)]
+    visual = (beat or "").strip()
+    medium = _MEDIUM.get(style, _MEDIUM["comic"])
     bits = [
-        f"2D animation keyframe of this exact story moment: {beat}",
+        visual,
+        medium,
         f"Camera: {angle}",
-        "Action pose, implied motion, speed lines, saturated cel color",
+        "One clear scene, action in frame, saturated color",
     ]
     if setting:
         bits.append(f"Location: {setting}")
+    gender = beat_gender(beat, story)
+    if gender == "male" and not beat_is_creature(beat):
+        bits.append("The living human is male, a boy or man, he/him. Do not draw a girl")
+    elif gender == "female" and not beat_is_creature(beat):
+        bits.append("The living human is female, a girl or woman, she/her. Do not draw a boy")
     if character_lock:
         bits.append(f"If the creature appears, draw: {character_lock}")
+    role = _ref_role()
+    if _ref_path().is_file() and role == "character":
+        bits.append("Same human as the reference photo, consistent face and clothes")
+    elif _ref_path().is_file() and role == "creature":
+        bits.append(
+            "Reference photo is the ghost or creature only. "
+            "Do not put that face on the living narrator"
+        )
+    elif _ref_path().is_file() and role == "style":
+        bits.append("Match the reference art style only, not the face")
     bits.append(
         "Full bleed vertical frame, one scene only, not a split comic page, "
         "no letterbox, no black bars, no panel border. "
-        "Depict the action in the sentence, not a random portrait. "
+        "Draw this visual search exactly, not a random portrait. "
         "No text, no speech bubbles, no captions."
     )
     return ". ".join(bits)
@@ -239,7 +429,8 @@ def _beats_for(part: dict, panel_count: int = None) -> list:
     if explicit:
         beats = [str(p).strip() for p in explicit if str(p).strip()]
     else:
-        beats = pack_beats(part["text"], target=panel_count)
+        from tts_engine import for_speech
+        beats = pack_beats(for_speech(part["text"]), target=panel_count)
     if not beats:
         beats = [part.get("image_prompt") or part.get("broll_query") or (part.get("text") or "")[:160]]
     return [b for b in beats if str(b).strip()]
@@ -255,6 +446,7 @@ def generate_board(
     height: int = None,
     panel_count: int = None,
     on_panel=None,
+    story: str = "",
 ) -> list:
     """
     Stills only — no narration timing. Used by the Studio Images tab.
@@ -264,18 +456,22 @@ def generate_board(
     if not beats:
         raise ValueError("Write a story before drawing panels.")
     setting = part.get("broll_query") or ""
+    story = story or part.get("text") or ""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     panels = []
     last_path = None
     for i, beat in enumerate(beats):
-        prompt = _panel_prompt(beat, setting, character_lock, index=i)
+        prompt = _panel_prompt(
+            beat, setting, character_lock, index=i, style=style, story=story,
+        )
         dest = out_dir / f"panel_{i + 1}.jpg"
         seed = None if character_seed is None else int(character_seed) + i * 17
         try:
             last_path = fetch_ai_image(
                 prompt, dest, seed=seed, style=style, width=width, height=height,
+                use_ref=use_ref_for_beat(beat), beat=beat,
             )
         except RuntimeError as exc:
             print(f"[image] panel {i + 1} failed ({exc}); reusing previous panel")
@@ -292,6 +488,43 @@ def generate_board(
             on_panel(i + 1, len(beats), panels[-1])
         if i < len(beats) - 1:
             time.sleep(2)
+    return panels
+
+
+def _reuse_board_files() -> list:
+    raw = (getattr(config, "REUSE_BOARD_DIR", "") or "").strip()
+    if not raw:
+        return []
+    src = Path(raw)
+    if not src.is_dir():
+        return []
+    return sorted(src.glob("panel_*.jpg"))
+
+
+def _reuse_board_panels(out_dir: Path, beats: list, times: list) -> list:
+    files = _reuse_board_files()
+    if not files:
+        return []
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    panels = []
+    for i, src_path in enumerate(files):
+        dest = out_dir / "panel_{0}.jpg".format(i + 1)
+        if dest.resolve() != src_path.resolve():
+            shutil.copy2(src_path, dest)
+        start, end = times[i] if i < len(times) else (0.0, 1.0)
+        beat = beats[i] if i < len(beats) else src_path.stem
+        panels.append({
+            "path": dest,
+            "start": start,
+            "end": end,
+            "beat": beat,
+            "prompt": "",
+            "seed": None,
+        })
+        print("[image] reusing board {0} -> {1}".format(src_path.name, dest.name))
+    if times and panels:
+        panels[-1]["end"] = times[-1][1]
     return panels
 
 
@@ -314,18 +547,29 @@ def generate_storyboard(
 
     # Time against the spoken narration, never against image-prompt wording.
     # Matching visual prompts to Whisper words collapsed every panel onto the last second.
-    spoken = pack_beats(part["text"], target=len(beats))
+    from tts_engine import for_speech
+    spoken = pack_beats(for_speech(part["text"]), target=len(beats))
     times = _beat_times(spoken if len(spoken) == len(beats) else beats, words or [], duration)
     if len(times) != len(beats) or not _times_look_ok(times, duration):
         times = _even_times(len(beats), duration, words or [])
     setting = part.get("broll_query") or ""
+    story = part.get("text") or ""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    reuse_files = _reuse_board_files()
+    if reuse_files:
+        times = visual_beat_times(for_speech(part["text"]), len(reuse_files), words or [], duration)
+        reused = _reuse_board_panels(out_dir, beats, times)
+        if reused:
+            return reused
 
     panels = []
     last_path = None
     for i, beat in enumerate(beats):
-        prompt = _panel_prompt(beat, setting, character_lock, index=i)
+        prompt = _panel_prompt(
+            beat, setting, character_lock, index=i, style=style, story=story,
+        )
         dest = out_dir / f"panel_{i + 1}.jpg"
         seed = None if character_seed is None else int(character_seed) + i * 17
         reuse = dest.exists() and dest.stat().st_size > 2000 and os.getenv("REUSE_IMAGES") == "1"
@@ -334,7 +578,10 @@ def generate_storyboard(
             print(f"[image] reusing {dest.name}")
         else:
             try:
-                last_path = fetch_ai_image(prompt, dest, seed=seed, style=style)
+                last_path = fetch_ai_image(
+                    prompt, dest, seed=seed, style=style,
+                    use_ref=use_ref_for_beat(beat), beat=beat,
+                )
             except RuntimeError as exc:
                 print(f"[image] panel {i + 1} failed ({exc}); reusing previous panel")
                 if last_path is None:

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=7" />
+  <link rel="stylesheet" href="/app.css?v=21" />
 </head>
 <body class="page">
   <div class="grain" aria-hidden="true"></div>
@@ -34,7 +34,7 @@
     <section class="dash-hero">
       <p class="dialog-kicker">Dashboard</p>
       <h1 id="hello">Welcome back.</h1>
-      <p class="dialog-copy">Add your three API keys, then open Studio and cut a reel. Each account keeps its own keys.</p>
+      <p class="dialog-copy">Add your keys, connect YouTube if you want to publish, then open Studio and cut a reel.</p>
       <div class="dash-actions">
         <a class="go auth-go" href="/studio">Open studio</a>
         <a class="tab" href="/settings">API keys</a>
@@ -48,7 +48,45 @@
       <ul id="library"></ul>
       <p class="dialog-copy" id="libEmpty">No cuts yet. Open Studio when your keys are in.</p>
     </section>
+
+    <section class="dash-youtube">
+      <div class="yt-head">
+        <h2>YouTube</h2>
+        <button type="button" class="text-ai" id="youtubeRefresh">Refresh</button>
+      </div>
+      <p class="length-note" id="youtubeListNote">Connect YouTube in Settings to list your shorts here.</p>
+      <ul id="youtubeList"></ul>
+    </section>
   </main>
-  <script src="/dashboard.js?v=6"></script>
+
+  <div class="dialog" id="youtubeDialog" hidden>
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="youtubeTitle">
+      <p class="dialog-kicker">YouTube</p>
+      <h3 id="youtubeTitle">Edit YouTube listing</h3>
+      <p class="dialog-name" id="youtubeName"></p>
+      <label class="field">
+        <span>Title</span>
+        <input id="youtubeVideoTitle" type="text" maxlength="100" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>Description</span>
+        <textarea id="youtubeDescription" rows="3" maxlength="5000" placeholder="optional"></textarea>
+      </label>
+      <label class="field">
+        <span>Visibility</span>
+        <select id="youtubePrivacy">
+          <option value="unlisted">Unlisted — link only</option>
+          <option value="private">Private — only you</option>
+          <option value="public">Public</option>
+        </select>
+      </label>
+      <p class="dialog-copy" id="youtubeCopy">Changes apply on YouTube immediately.</p>
+      <div class="dialog-actions">
+        <button type="button" id="youtubeCancel">Cancel</button>
+        <button type="button" class="go" id="youtubeConfirm">Save</button>
+      </div>
+    </div>
+  </div>
+  <script src="/dashboard.js?v=8"></script>
 </body>
 </html>

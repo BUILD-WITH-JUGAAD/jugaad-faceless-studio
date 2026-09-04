@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -23,7 +24,15 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _lock = threading.Lock()
 _ROUNDS = 200_000
 
-KEY_FIELDS = ("pexels", "pollinations", "epidemic", "openai")
+KEY_FIELDS = (
+    "pexels",
+    "pollinations",
+    "epidemic",
+    "openai",
+    "google_client_id",
+    "google_client_secret",
+    "youtube",
+)
 
 
 def database_url() -> str:
@@ -356,8 +365,36 @@ def keys_public(user_id: int) -> dict:
     public = {}
     for name in KEY_FIELDS:
         value = keys.get(name) or ""
+        if name == "youtube":
+            tokens = parse_youtube_tokens(value)
+            channel = (tokens.get("channel") or "").strip()
+            connected = bool(tokens.get("refresh_token"))
+            public[name] = {
+                "set": connected,
+                "hint": channel or ("connected" if connected else ""),
+                "channel": channel,
+            }
+            continue
         public[name] = {"set": bool(value), "hint": _hint(value) if value else ""}
     return public
+
+
+def parse_youtube_tokens(raw: str) -> dict:
+    try:
+        data = json.loads(raw or "")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def youtube_tokens(user_id: int) -> dict:
+    return parse_youtube_tokens(get_keys(user_id).get("youtube") or "")
+
+
+def save_youtube_tokens(user_id: int, tokens: dict) -> dict:
+    if not tokens:
+        return save_keys(user_id, {"youtube": None})
+    return save_keys(user_id, {"youtube": json.dumps(tokens)})
 
 
 def save_keys(user_id: int, updates: dict) -> dict:
@@ -396,6 +433,8 @@ def apply_user_keys(user_id: int) -> dict:
         ("POLLINATIONS_API_KEY", "pollinations"),
         ("EPIDEMIC_API_KEY", "epidemic"),
         ("OPENAI_API_KEY", "openai"),
+        ("GOOGLE_CLIENT_ID", "google_client_id"),
+        ("GOOGLE_CLIENT_SECRET", "google_client_secret"),
     )
     for env_name, field in mapping:
         val = (keys.get(field) or "").strip().strip('"').strip("'")

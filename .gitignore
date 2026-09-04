@@ -14,6 +14,6 @@ assets/ai_images/
 assets/ai_video/
 assets/captions/
 assets/epidemic_preview/
-assets/background_music/
+assets/refs/
 *.mp4
 *.wav

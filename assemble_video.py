@@ -184,24 +184,43 @@ def _bottom_scrim(duration: float) -> ImageClip:
     )
 
 
-def _mix_audio(narration, duration, extras):
-    """Narration on top of a quiet looping background track, if one exists."""
+def _mix_audio(narration, duration, extras, sfx_overlays=None):
+    """Narration on top of a quiet looping background track, plus cue SFX."""
+    layers = [narration]
     track = pick_background_music()
-    if track is None:
+    if track is not None:
+        music = AudioFileClip(str(track))
+        extras.append(music)
+        vol = float(getattr(config, "MUSIC_VOLUME", 0.12))
+        if hasattr(music, "volumex"):
+            music = music.volumex(vol)
+        if music.duration < duration:
+            music = audio_loop(music, duration=duration)
+        else:
+            music = music.subclip(0, duration)
+        if hasattr(music, "audio_fadein"):
+            music = music.audio_fadein(0.4).audio_fadeout(1.2)
+        extras.append(music)
+        layers.append(music)
+    for item in sfx_overlays or []:
+        path = item.get("path")
+        if not path:
+            continue
+        clip = AudioFileClip(str(path))
+        extras.append(clip)
+        start = max(0.0, float(item.get("start") or 0.0))
+        hold = min(float(clip.duration or 0), 4.0)
+        if hold <= 0:
+            continue
+        clip = clip.subclip(0, hold).set_start(start)
+        sfx_vol = float(item.get("volume") or 0.34)
+        if hasattr(clip, "volumex"):
+            clip = clip.volumex(sfx_vol)
+        extras.append(clip)
+        layers.append(clip)
+    if len(layers) == 1:
         return narration
-    music = AudioFileClip(str(track))
-    extras.append(music)
-    vol = float(getattr(config, "MUSIC_VOLUME", 0.12))
-    if hasattr(music, "volumex"):
-        music = music.volumex(vol)
-    if music.duration < duration:
-        music = audio_loop(music, duration=duration)
-    else:
-        music = music.subclip(0, duration)
-    if hasattr(music, "audio_fadein"):
-        music = music.audio_fadein(0.4).audio_fadeout(1.2)
-    extras.append(music)
-    mixed = CompositeAudioClip([narration, music]).set_duration(duration)
+    mixed = CompositeAudioClip(layers).set_duration(duration)
     extras.append(mixed)
     return mixed
 
@@ -214,6 +233,7 @@ def _overlay_and_write(
     out_path,
     part_label,
     extras_to_close,
+    sfx_overlays=None,
 ):
     _sync_canvas()
     layers = [background, _bottom_scrim(duration)]
@@ -234,7 +254,7 @@ def _overlay_and_write(
         layers.append(_make_caption_clip(chunk, (_W, _H)))
 
     extras_to_close = list(extras_to_close or [])
-    mixed = _mix_audio(audio, duration, extras_to_close)
+    mixed = _mix_audio(audio, duration, extras_to_close, sfx_overlays)
     final = CompositeVideoClip(layers, size=(_W, _H))
     final = final.set_duration(duration).set_audio(mixed)
 
@@ -286,6 +306,7 @@ def assemble(
     caption_chunks: list,
     out_path: Path,
     part_label: str = None,
+    sfx_overlays=None,
 ) -> Path:
     """
     Stitch real Pexels clips from assets/broll under the voiceover.
@@ -313,7 +334,8 @@ def assemble(
     video = _mute(video)
 
     return _overlay_and_write(
-        video, audio, duration, caption_chunks, out_path, part_label, extras + [video]
+        video, audio, duration, caption_chunks, out_path, part_label, extras + [video],
+        sfx_overlays,
     )
 
 
@@ -529,6 +551,7 @@ def assemble_from_images(
     caption_chunks: list,
     out_path: Path,
     part_label: str = None,
+    sfx_overlays=None,
 ) -> Path:
     """
     Comic animatic: smash-zoom + pan + shake per panel, whip-in and impact
@@ -563,7 +586,8 @@ def assemble_from_images(
     ).set_duration(duration).set_audio(None)
 
     return _overlay_and_write(
-        background, audio, duration, caption_chunks, out_path, part_label, extras + [background]
+        background, audio, duration, caption_chunks, out_path, part_label, extras + [background],
+        sfx_overlays,
     )
 
 
@@ -573,6 +597,7 @@ def assemble_from_videos(
     caption_chunks: list,
     out_path: Path,
     part_label: str = None,
+    sfx_overlays=None,
 ) -> Path:
     """
     Real motion clips (AI video or stock), timed to the narration, plus captions.
@@ -603,5 +628,6 @@ def assemble_from_videos(
     ).set_duration(duration).set_audio(None)
 
     return _overlay_and_write(
-        background, audio, duration, caption_chunks, out_path, part_label, extras + [background]
+        background, audio, duration, caption_chunks, out_path, part_label, extras + [background],
+        sfx_overlays,
     )

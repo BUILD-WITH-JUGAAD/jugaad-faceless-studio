@@ -24,9 +24,11 @@ AI_IMAGE_DIR = ASSETS / "ai_images"
 AI_VIDEO_DIR = ASSETS / "ai_video"
 CAPTIONS_DIR = ASSETS / "captions"
 MUSIC_DIR = ASSETS / "background_music"
+SFX_DIR = ASSETS / "sfx"
+REFS_DIR = ASSETS / "refs"
 OUTPUT_DIR = ROOT / "output"
 
-for d in [AUDIO_DIR, BROLL_DIR, STILLS_DIR, AI_IMAGE_DIR, AI_VIDEO_DIR, CAPTIONS_DIR, MUSIC_DIR, OUTPUT_DIR]:
+for d in [AUDIO_DIR, BROLL_DIR, STILLS_DIR, AI_IMAGE_DIR, AI_VIDEO_DIR, CAPTIONS_DIR, MUSIC_DIR, SFX_DIR, REFS_DIR, OUTPUT_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # Visual pipeline. Scripts and CLI can override (model=live, model=comic, …).
@@ -51,6 +53,17 @@ BROLL_CLIP_COUNT = 12
 # Same integer across a series makes Pollinations keep a related look.
 # Scripts can also set CHARACTER_SEED / CHARACTER_LOCK.
 CHARACTER_SEED = None
+# Optional local image used as a character/style lock for comic/cartoon/anime
+# (and as the first frame for AI video). CLI: ref=path/to/face.jpg
+REFERENCE_IMAGE = ""
+# How the photo is used. CLI: ref_role=creature|character|style|off
+#   creature  — ghost/monster only (default). People follow the story's he/she.
+#   character — lock every human face to the photo
+#   style     — mood only, do not copy the face
+#   off       — ignore the photo
+REFERENCE_ROLE = "creature"
+# Existing Images-tab board to time under a new voiceover. CLI: board=stem
+REUSE_BOARD_DIR = ""
 
 # Appended to every comic prompt so the channel stays visually consistent.
 # Punchy cel-animation stills, not muddy concept art.
@@ -136,6 +149,12 @@ EPIDEMIC_BASE_URL = os.getenv(
     "EPIDEMIC_BASE_URL",
     "https://partner-content-api.epidemicsound.com",
 )
+
+# YouTube Data API (OAuth). Client id/secret from Google Cloud; tokens are per account.
+# Redirect must match exactly — default is http://127.0.0.1:8787/youtube/callback
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID") or os.getenv("YOUTUBE_CLIENT_ID") or ""
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET") or os.getenv("YOUTUBE_CLIENT_SECRET") or ""
+YOUTUBE_REDIRECT_URI = os.getenv("YOUTUBE_REDIRECT_URI", "")
 
 # ---- Video output settings ----
 VIDEO_WIDTH = 1080

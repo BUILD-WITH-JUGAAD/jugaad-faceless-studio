@@ -11,6 +11,10 @@ const state = {
   previewId: null,
   previewObjectUrl: null,
   pendingDelete: null,
+  pendingYouTube: null,
+  youtubeMode: "upload",
+  youtubeVideos: [],
+  youtubeLoaded: false,
   playingUrl: null,
   epidemicKind: "music",
   epidemicLoaded: false,
@@ -23,7 +27,18 @@ const state = {
   currentBoard: null,
   tab: "video",
   storyEngine: "ollama",
+  ref: "",
+  refUrl: "",
+  refRole: "creature",
+  boardStem: "",
 };
+
+const REF_ROLES = [
+  { id: "creature", label: "Ghost / creature", hint: "Photo is the monster" },
+  { id: "character", label: "Character", hint: "Photo is the living person" },
+  { id: "style", label: "Style only", hint: "Mood, not the face" },
+];
+const FLOW_URL = "https://labs.google/fx/tools/flow";
 
 const $ = (id) => document.getElementById(id);
 
@@ -254,6 +269,7 @@ function renderOptions(data) {
       state.model = m.id;
       models.querySelectorAll(".card").forEach((n) => n.classList.remove("is-on"));
       b.classList.add("is-on");
+      syncRefUI();
     });
     models.appendChild(b);
   });
@@ -349,12 +365,18 @@ function renderOptions(data) {
   lib.innerHTML = "";
   (data.library || []).forEach((item) => {
     const li = document.createElement("li");
-    li.className = "lib-item";
+    li.className = "lib-item" + (item.orphan ? " is-orphan" : "");
     const open = document.createElement("button");
     open.type = "button";
     open.className = "lib-open";
-    open.textContent = item.name;
-    open.addEventListener("click", () => showVideo(item.url, item.name));
+    open.textContent = item.orphan ? item.name + " · leftover" : item.name;
+    open.addEventListener("click", () => {
+      if (item.url) {
+        showVideo(item.url, item.name);
+        return;
+      }
+      $("jobMeta").textContent = "No video file — leftover audio, script, or job files. Delete to remove them.";
+    });
     const x = document.createElement("button");
     x.type = "button";
     x.className = "lib-x";
@@ -366,10 +388,29 @@ function renderOptions(data) {
     });
     li.appendChild(open);
     li.appendChild(x);
+    if (item.url) {
+      const yt = document.createElement("button");
+      yt.type = "button";
+      const live = item.youtube && item.youtube.url;
+      yt.className = "lib-yt" + (live ? " is-live" : "");
+      yt.setAttribute("aria-label", live ? "Open YouTube upload" : "Upload " + item.name + " to YouTube");
+      yt.textContent = "YT";
+      yt.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (live) {
+          window.open(item.youtube.url, "_blank", "noopener,noreferrer");
+          return;
+        }
+        openYouTube(item);
+      });
+      li.appendChild(yt);
+    }
     lib.appendChild(li);
   });
 
   pill(data.busy ? "rendering" : "idle", data.busy);
+  syncRefUI();
+  if (youtubeReady() && !state.youtubeLoaded) loadYouTubeVideos();
 }
 
 function renderImageOptions(data) {
@@ -537,10 +578,22 @@ function showVideo(url, label) {
   const player = $("player");
   $("frame").classList.add("has-video");
   $("frame").classList.remove("has-progress");
-  state.playingUrl = url;
-  player.src = mediaSrc(url) + "?t=" + Date.now();
-  player.play().catch(() => {});
+  const src = mediaSrc(url);
+  state.playingUrl = src;
   $("jobMeta").textContent = label || "";
+  player.onerror = () => {
+    $("jobMeta").textContent = "Could not play this cut. Click it again in the library.";
+  };
+  player.onloadeddata = () => {
+    player.play().catch(() => {});
+  };
+  if (player.getAttribute("src") !== src) {
+    player.src = src;
+    player.load();
+  } else {
+    player.currentTime = 0;
+    player.play().catch(() => {});
+  }
 }
 
 function clearPlayer() {
@@ -633,7 +686,7 @@ function openDelete(item, kind) {
   $("dialogTitle").textContent = kind === "images" ? "Delete this board?" : "Delete this cut?";
   $("dialogCopy").textContent = kind === "images"
     ? "This permanently deletes the stills. You cannot undo it."
-    : "This permanently deletes the video and every associated file (audio, captions, b-roll, stills). You cannot undo it.";
+    : "This permanently deletes the video and every associated file (audio, captions, b-roll, stills, script, and job). You cannot undo it.";
   $("dialogName").textContent = item.name;
   $("dialog").hidden = false;
   $("dialogConfirm").focus();
@@ -642,6 +695,254 @@ function openDelete(item, kind) {
 function closeDelete() {
   state.pendingDelete = null;
   $("dialog").hidden = true;
+}
+
+function youtubeReady() {
+  const yt = state.options && state.options.youtube;
+  return Boolean(yt && yt.enabled && yt.connected);
+}
+
+function youtubeFormVisible(show) {
+  const form = $("youtubeForm");
+  const done = $("youtubeDone");
+  if (form) form.hidden = !show;
+  if (done) done.hidden = show;
+}
+
+function openYouTube(item) {
+  state.pendingYouTube = item;
+  state.youtubeMode = "upload";
+  $("youtubeTitle").textContent = "Upload this cut?";
+  $("youtubeName").textContent = item.name;
+  $("youtubeVideoTitle").value = String(item.name || "").replace(/_/g, " ");
+  $("youtubeDescription").value = "";
+  $("youtubePrivacy").value = "unlisted";
+  $("youtubeShorts").checked = true;
+  $("youtubeKids").checked = false;
+  $("youtubeShortsRow").hidden = false;
+  $("youtubeKidsRow").hidden = false;
+  $("youtubeConfirm").textContent = "Upload";
+  const ready = youtubeReady();
+  $("youtubeCopy").textContent = ready
+    ? "Uploads as unlisted unless you change it. Large files can take a few minutes."
+    : "Connect YouTube in Settings first (Google client + Connect).";
+  $("youtubeConfirm").disabled = !ready;
+  youtubeFormVisible(true);
+  $("youtubeDialog").hidden = false;
+  $("youtubeVideoTitle").focus();
+}
+
+function openYouTubeEdit(video) {
+  state.pendingYouTube = video;
+  state.youtubeMode = "edit";
+  $("youtubeTitle").textContent = "Edit YouTube listing";
+  $("youtubeName").textContent = video.id || "";
+  $("youtubeVideoTitle").value = video.title || "";
+  $("youtubeDescription").value = video.description || "";
+  $("youtubePrivacy").value = video.privacy || "unlisted";
+  $("youtubeShortsRow").hidden = true;
+  $("youtubeKidsRow").hidden = true;
+  $("youtubeConfirm").textContent = "Save";
+  $("youtubeCopy").textContent = "Changes apply on YouTube immediately.";
+  $("youtubeConfirm").disabled = !youtubeReady();
+  youtubeFormVisible(true);
+  $("youtubeDialog").hidden = false;
+  $("youtubeVideoTitle").focus();
+}
+
+function showYouTubeSuccess(body) {
+  state.youtubeMode = "done";
+  $("youtubeTitle").textContent = "Uploaded successfully";
+  $("youtubeName").textContent = body.title || "";
+  $("youtubeDoneCopy").textContent = "Uploaded successfully as " + (body.privacy || "unlisted") + ".";
+  const link = $("youtubeDoneLink");
+  link.href = body.url || "#";
+  link.textContent = body.url || "Open on YouTube";
+  $("jobMeta").textContent = body.url
+    ? "Uploaded successfully — " + body.url
+    : "Uploaded successfully.";
+  youtubeFormVisible(false);
+  $("youtubeDialog").hidden = false;
+  loadYouTubeVideos();
+  loadOptions();
+}
+
+function closeYouTube() {
+  state.pendingYouTube = null;
+  state.youtubeMode = "upload";
+  $("youtubeDialog").hidden = true;
+  $("youtubeConfirm").disabled = false;
+  $("youtubeConfirm").textContent = "Upload";
+  youtubeFormVisible(true);
+}
+
+async function confirmYouTube() {
+  const item = state.pendingYouTube;
+  if (!item) return;
+  if (!youtubeReady()) {
+    window.location.href = "/settings";
+    return;
+  }
+  if (state.youtubeMode === "edit") {
+    await saveYouTubeEdit(item);
+    return;
+  }
+  const name = item.file || item.name;
+  const btn = $("youtubeConfirm");
+  btn.disabled = true;
+  btn.textContent = "Uploading…";
+  $("youtubeCopy").textContent = "Uploading to YouTube… keep this tab open.";
+  const res = await api("/api/library/" + encodeURIComponent(name) + "/youtube", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: $("youtubeVideoTitle").value.trim(),
+      description: $("youtubeDescription").value,
+      privacy: $("youtubePrivacy").value,
+      shorts: $("youtubeShorts").checked,
+      made_for_kids: $("youtubeKids").checked,
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    $("youtubeCopy").textContent = body.detail || "Could not upload.";
+    btn.disabled = false;
+    btn.textContent = "Upload";
+    return;
+  }
+  btn.disabled = false;
+  showYouTubeSuccess(body);
+}
+
+async function saveYouTubeEdit(video) {
+  const btn = $("youtubeConfirm");
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+  const res = await api("/api/youtube/videos/" + encodeURIComponent(video.id), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: $("youtubeVideoTitle").value.trim(),
+      description: $("youtubeDescription").value,
+      privacy: $("youtubePrivacy").value,
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    $("youtubeCopy").textContent = body.detail || "Could not save. Reconnect YouTube in Settings if this channel was connected before manage access.";
+    btn.disabled = false;
+    btn.textContent = "Save";
+    return;
+  }
+  closeYouTube();
+  $("jobMeta").textContent = "YouTube listing updated.";
+  loadYouTubeVideos();
+  loadOptions();
+}
+
+function formatYouTubeDuration(seconds) {
+  const n = Math.max(0, Math.round(Number(seconds) || 0));
+  const m = Math.floor(n / 60);
+  const s = n % 60;
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+function renderYouTubeList(videos) {
+  const list = $("youtubeList");
+  const note = $("youtubeListNote");
+  if (!list) return;
+  list.innerHTML = "";
+  const rows = videos || [];
+  if (!youtubeReady()) {
+    if (note) note.textContent = "Connect YouTube in Settings to list your shorts here.";
+    return;
+  }
+  if (!rows.length) {
+    if (note) note.textContent = "No uploads on this channel yet.";
+    return;
+  }
+  if (note) note.textContent = rows.length + " on your channel. Edit title, description, or visibility — or delete from YouTube.";
+  rows.forEach((video) => {
+    const li = document.createElement("li");
+    li.className = "yt-row";
+    const img = document.createElement("img");
+    img.alt = "";
+    img.src = video.thumb || "";
+    const meta = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = video.title || video.id;
+    const sub = document.createElement("em");
+    sub.textContent = [
+      video.shorts ? "Short" : "Video",
+      video.privacy || "",
+      formatYouTubeDuration(video.seconds),
+    ].filter(Boolean).join(" · ");
+    meta.appendChild(title);
+    meta.appendChild(sub);
+    const actions = document.createElement("div");
+    actions.className = "yt-row-actions";
+    const open = document.createElement("a");
+    open.href = video.url;
+    open.target = "_blank";
+    open.rel = "noopener noreferrer";
+    open.textContent = "Open";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => openYouTubeEdit(video));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", () => deleteYouTubeVideo(video));
+    actions.appendChild(open);
+    actions.appendChild(edit);
+    actions.appendChild(del);
+    li.appendChild(img);
+    li.appendChild(meta);
+    li.appendChild(actions);
+    list.appendChild(li);
+  });
+}
+
+async function loadYouTubeVideos() {
+  const note = $("youtubeListNote");
+  if (!youtubeReady()) {
+    renderYouTubeList([]);
+    return;
+  }
+  if (note) note.textContent = "Loading your YouTube uploads…";
+  try {
+    const res = await api("/api/youtube/videos");
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (note) {
+        note.textContent = body.detail || "Could not list YouTube videos. Reconnect in Settings to allow manage access.";
+      }
+      return;
+    }
+    state.youtubeVideos = body.videos || [];
+    state.youtubeLoaded = true;
+    renderYouTubeList(state.youtubeVideos);
+  } catch (err) {
+    if (String(err.message) === "auth") return;
+    if (note) note.textContent = "Could not list YouTube videos.";
+  }
+}
+
+async function deleteYouTubeVideo(video) {
+  if (!video || !video.id) return;
+  if (!window.confirm("Delete “" + (video.title || video.id) + "” from YouTube? This cannot be undone.")) {
+    return;
+  }
+  const res = await api("/api/youtube/videos/" + encodeURIComponent(video.id), { method: "DELETE" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    $("jobMeta").textContent = body.detail || "Could not delete that YouTube video.";
+    return;
+  }
+  $("jobMeta").textContent = "Deleted from YouTube.";
+  loadYouTubeVideos();
+  loadOptions();
 }
 
 async function confirmDelete() {
@@ -849,6 +1150,63 @@ async function uploadTrack(file) {
   await loadOptions();
 }
 
+function syncRefUI() {
+  [
+    ["videoRefThumb", "videoRefClear"],
+    ["imageRefThumb", "imageRefClear"],
+  ].forEach(([thumbId, clearId]) => {
+    const thumb = $(thumbId);
+    const clear = $(clearId);
+    if (!thumb) return;
+    if (state.refUrl) {
+      thumb.src = mediaSrc(state.refUrl);
+      thumb.hidden = false;
+      if (clear) clear.hidden = false;
+    } else {
+      thumb.removeAttribute("src");
+      thumb.hidden = true;
+      if (clear) clear.hidden = true;
+    }
+  });
+  const note = $("videoRefNote");
+  if (note) {
+    if (state.model === "live") {
+      note.textContent = "Live Pexels ignores the photo. Pick comic, cartoon, or anime.";
+    } else if (state.refRole === "character") {
+      note.textContent = "Every human face will match this photo.";
+    } else if (state.refRole === "style") {
+      note.textContent = "Only the look is copied. Faces follow the story.";
+    } else {
+      note.textContent = "Ghost / creature is the default — the photo is the monster, not the narrator.";
+    }
+  }
+  renderRefRoles();
+}
+
+function clearRef() {
+  state.ref = "";
+  state.refUrl = "";
+  syncRefUI();
+}
+
+async function uploadRef(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const meta = state.tab === "images" ? $("imageMeta") : $("jobMeta");
+  if (meta) meta.textContent = "Uploading reference…";
+  const res = await api("/api/ref/upload", { method: "POST", body: fd });
+  const body = await res.json().catch(() => ({}));
+  const detail = typeof body.detail === "string" ? body.detail : (body.detail && JSON.stringify(body.detail));
+  if (!res.ok) {
+    if (meta) meta.textContent = detail || "Could not add that photo.";
+    return;
+  }
+  state.ref = body.id;
+  state.refUrl = body.url;
+  syncRefUI();
+  if (meta) meta.textContent = "Reference photo ready.";
+}
+
 async function loadOptions() {
   const data = await (await api("/api/options")).json();
   state.options = data;
@@ -878,13 +1236,29 @@ function openaiEnabled() {
   return Boolean(state.options && state.options.openai && state.options.openai.enabled);
 }
 
+function visualsEl(kind) {
+  return kind === "images" ? $("imageVisuals") : $("visuals");
+}
+
+function setVisuals(kind, lines) {
+  const el = visualsEl(kind);
+  if (!el) return;
+  const text = Array.isArray(lines) ? lines.join("\n") : String(lines || "");
+  if (text.trim()) el.value = text;
+}
+
+function visualsValue(kind) {
+  const el = visualsEl(kind);
+  return el ? el.value : "";
+}
+
 async function syncStoryMeta(kind) {
   const images = kind === "images";
   const area = images ? $("imagePrompt") : $("prompt");
   const title = images ? $("imageTitle") : $("title");
   const setting = images ? $("imageSetting") : $("setting");
   const idea = area.value.trim();
-  if (idea.split(/\s+/).length < 8) return;
+  if (idea.split(/\s+/).length < 3) return;
   try {
     const res = await api("/api/story/derive", {
       method: "POST",
@@ -899,6 +1273,10 @@ async function syncStoryMeta(kind) {
     if (!res.ok) return;
     if (body.title) title.value = body.title;
     if (body.setting) setting.value = body.setting;
+    const box = visualsEl(kind);
+    if (box && !box.value.trim() && body.visuals && body.visuals.length) {
+      setVisuals(kind, body.visuals);
+    }
   } catch (err) {
     if (String(err.message) === "auth") return;
   }
@@ -926,13 +1304,13 @@ async function expandStory(kind) {
     return;
   }
   if (!idea) {
-    meta.textContent = "Write a short prompt in the story box first.";
+    meta.textContent = "Write a short prompt first.";
     return;
   }
   if (!images) onSecondsInput();
   button.disabled = true;
   meta.classList.remove("bad");
-  meta.textContent = "Writing the story…";
+  meta.textContent = images ? "Writing visual beats…" : "Writing the story…";
   try {
     const res = await api("/api/story/expand", {
       method: "POST",
@@ -941,24 +1319,28 @@ async function expandStory(kind) {
         idea,
         seconds: images ? 180 : (Number.isFinite(state.seconds) ? state.seconds : 180),
         provider: state.storyEngine || "ollama",
+        mode: images ? "images" : "story",
       }),
     });
     const body = await res.json().catch(() => ({}));
     const detail = typeof body.detail === "string" ? body.detail : "";
     if (!res.ok) {
       meta.classList.add("bad");
-      meta.textContent = detail || "Could not write that story.";
+      meta.textContent = detail || (images ? "Could not write those beats." : "Could not write that story.");
       return;
     }
     area.value = body.text || "";
     if (body.title) title.value = body.title;
     if (body.setting) setting.value = body.setting;
+    if (body.visuals && body.visuals.length) setVisuals(kind, body.visuals);
     meta.classList.remove("bad");
-    meta.textContent = "Story drafted. Title and setting filled from it — edit if you want, then generate.";
+    meta.textContent = images
+      ? "Visual beats and search keys ready. Edit if you want, then generate stills."
+      : "Story drafted. Title, setting, and visual keys filled — edit if you want, then generate.";
   } catch (err) {
     if (String(err.message) === "auth") return;
     meta.classList.add("bad");
-    meta.textContent = "Could not write that story.";
+    meta.textContent = images ? "Could not write those beats." : "Could not write that story.";
   } finally {
     button.disabled = false;
   }
@@ -997,11 +1379,15 @@ async function generate() {
       model: state.model,
       music: state.music,
       voice: state.voice,
+      ref: state.ref || "",
+      ref_role: state.refRole || "creature",
+      board: state.boardStem || "",
       size: state.size,
       length: state.length,
       seconds: Number.isFinite(state.seconds) ? state.seconds : 180,
       title: $("title").value.trim(),
       setting: $("setting").value.trim(),
+      visuals: visualsValue("video"),
     }),
   });
     const body = await res.json().catch(() => ({}));
@@ -1017,6 +1403,7 @@ async function generate() {
   state.jobId = body.id;
   if (body.title) $("title").value = body.title;
   if (body.setting) $("setting").value = body.setting;
+  if (body.visuals && body.visuals.length) setVisuals("video", body.visuals);
   $("jobMeta").classList.remove("bad");
   $("jobMeta").textContent = `Job ${body.id} · ${body.model} · ${body.size} · ${body.seconds || "full"}s`;
   if (state.poll) clearInterval(state.poll);
@@ -1034,8 +1421,8 @@ function imagePanelCount() {
 
 async function generateImages() {
   const prompt = $("imagePrompt").value.trim();
-  if (prompt.split(/\s+/).length < 8) {
-    $("imageMeta").textContent = "Write a fuller story before generating.";
+  if (prompt.split(/\s+/).length < 3) {
+    $("imageMeta").textContent = "Write a short prompt first — a scene or subject is enough.";
     return;
   }
   await syncStoryMeta("images");
@@ -1058,6 +1445,9 @@ async function generateImages() {
       size: state.imageSize,
       title: $("imageTitle").value.trim(),
       setting: $("imageSetting").value.trim(),
+      visuals: visualsValue("images"),
+      ref: state.ref || "",
+      ref_role: state.refRole || "creature",
       panels: imagePanelCount(),
     }),
   });
@@ -1074,6 +1464,7 @@ async function generateImages() {
   state.jobId = body.id;
   if (body.title) $("imageTitle").value = body.title;
   if (body.setting) $("imageSetting").value = body.setting;
+  if (body.visuals && body.visuals.length) setVisuals("images", body.visuals);
   $("imageMeta").classList.remove("bad");
   $("imageMeta").textContent = "Job " + body.id + " · " + body.model + " · " + body.size;
   if (state.poll) clearInterval(state.poll);
@@ -1087,14 +1478,31 @@ function useBoardInReel() {
   $("prompt").value = board.prompt || $("imagePrompt").value;
   $("title").value = board.name && board.name !== board.stem ? board.name : ($("imageTitle").value || board.stem || "");
   $("setting").value = board.setting || $("imageSetting").value;
+  if ($("imageVisuals") && $("imageVisuals").value.trim()) {
+    $("visuals").value = $("imageVisuals").value;
+  } else if (board.visuals && board.visuals.length) {
+    setVisuals("video", board.visuals);
+  }
   if (board.model) state.model = board.model;
   if (board.size) {
     state.size = board.size;
     setFrame(board.size);
   }
+  state.boardStem = board.stem || "";
+  syncBoardNote();
   const videoTab = document.querySelector('.work-tabs .tab[data-tab="video"]');
   if (videoTab) videoTab.click();
   loadOptions();
+}
+
+function syncBoardNote() {
+  const fine = $("videoFine");
+  if (!fine) return;
+  if (state.boardStem) {
+    fine.textContent = "Using stills from board “" + state.boardStem + "”. Generate video to time them to the voice — they will not be redrawn.";
+  } else {
+    fine.textContent = "Runs on this machine. First render is slow (TTS + Whisper + edit). Keep the tab open.";
+  }
 }
 
 async function tickJob() {
@@ -1126,6 +1534,7 @@ async function tickJob() {
       stem: job.stem,
       prompt: job.prompt,
       setting: job.setting,
+      visuals: job.visuals,
       model: job.model,
       size: job.size,
       panels: job.panels,
@@ -1141,6 +1550,7 @@ async function tickJob() {
         stem: job.stem,
         prompt: job.prompt,
         setting: job.setting,
+        visuals: job.visuals,
         model: job.model,
         size: job.size,
         panels: job.panels || [],
@@ -1199,6 +1609,10 @@ document.addEventListener("keydown", (e) => {
     closeDelete();
     return;
   }
+  if (e.key === "Escape" && $("youtubeDialog") && !$("youtubeDialog").hidden) {
+    closeYouTube();
+    return;
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") generate();
 });
 
@@ -1216,11 +1630,156 @@ $("musicFile").addEventListener("change", (e) => {
   if (file) uploadTrack(file);
 });
 
+function renderRefRoles() {
+  ["videoRefRoles", "imageRefRoles"].forEach((id) => {
+    const host = $(id);
+    if (!host) return;
+    host.innerHTML = "";
+    REF_ROLES.forEach((role) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "card" + (role.id === state.refRole ? " is-on" : "");
+      b.innerHTML = "<strong>" + role.label + "</strong><span>" + role.hint + "</span>";
+      b.addEventListener("click", () => {
+        state.refRole = role.id;
+        renderRefRoles();
+        syncRefUI();
+      });
+      host.appendChild(b);
+    });
+  });
+}
+
+function flowPrompt() {
+  const images = state.tab === "images";
+  const story = images ? $("imagePrompt").value.trim() : $("prompt").value.trim();
+  const keys = visualsValue(images ? "images" : "video");
+  const setting = images ? $("imageSetting").value.trim() : $("setting").value.trim();
+  const genderHint = /\b(he|him|his|boy|man)\b/i.test(story)
+    ? "The living human is male."
+    : (/\b(she|her|girl|woman)\b/i.test(story) ? "The living human is female." : "");
+  const role = state.refRole === "character"
+    ? "The uploaded ingredient is the living character. Keep that face."
+    : (state.refRole === "style"
+      ? "The uploaded ingredient is style only. Do not copy the face."
+      : "The uploaded ingredient is the ghost or creature only. Do not put that face on the living person.");
+  const bits = [
+    "2D anime still, vertical 9:16, no text.",
+    role,
+    genderHint,
+    setting ? "Location: " + setting : "",
+    keys ? "Scenes:\n" + keys : story,
+  ];
+  return bits.filter(Boolean).join("\n");
+}
+
+async function openGoogleFlow() {
+  const meta = state.tab === "images" ? $("imageMeta") : $("jobMeta");
+  const text = flowPrompt();
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    }
+  } catch (err) {
+    /* copy is optional */
+  }
+  if (state.refUrl) {
+    const a = document.createElement("a");
+    a.href = mediaSrc(state.refUrl);
+    a.download = "jugaad-ingredient.jpg";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  window.open(FLOW_URL, "_blank", "noopener,noreferrer");
+  if (meta) {
+    meta.textContent = state.refUrl
+      ? "Prompt copied. Drop the downloaded photo into Flow → Ingredients."
+      : "Prompt copied. Add a reference photo in Studio first, then drop it into Flow → Ingredients.";
+  }
+}
+
+function bindRefInput(inputId, clearId) {
+  const input = $(inputId);
+  const clear = $(clearId);
+  if (input) {
+    input.addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = "";
+      if (file) uploadRef(file);
+    });
+  }
+  if (clear) clear.addEventListener("click", clearRef);
+}
+
+function imageFileFromList(list) {
+  if (!list || !list.length) return null;
+  const files = Array.from(list);
+  return files.find((f) => /^image\/(jpeg|png|webp)$/i.test(f.type) || /\.(jpe?g|png|webp)$/i.test(f.name || ""))
+    || files.find((f) => (f.type || "").indexOf("image/") === 0)
+    || null;
+}
+
+function bindRefDrop(dropId) {
+  const zone = $(dropId);
+  if (!zone) return;
+  ["dragenter", "dragover"].forEach((ev) => {
+    zone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      zone.classList.add("is-over");
+    });
+  });
+  zone.addEventListener("dragleave", (e) => {
+    if (!zone.contains(e.relatedTarget)) zone.classList.remove("is-over");
+  });
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    zone.classList.remove("is-over");
+    const file = imageFileFromList(e.dataTransfer && e.dataTransfer.files);
+    if (!file) {
+      const meta = state.tab === "images" ? $("imageMeta") : $("jobMeta");
+      if (meta) meta.textContent = "Drop a jpg, png, or webp photo.";
+      return;
+    }
+    uploadRef(file);
+  });
+}
+
+bindRefInput("videoRefFile", "videoRefClear");
+bindRefInput("imageRefFile", "imageRefClear");
+bindRefDrop("videoRefDrop");
+bindRefDrop("imageRefDrop");
+if ($("videoFlowOpen")) $("videoFlowOpen").addEventListener("click", openGoogleFlow);
+if ($("imageFlowOpen")) $("imageFlowOpen").addEventListener("click", openGoogleFlow);
+renderRefRoles();
+window.addEventListener("dragover", (e) => {
+  if (e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf("Files") !== -1) e.preventDefault();
+});
+window.addEventListener("drop", (e) => {
+  if (e.target && e.target.closest && e.target.closest(".ref-drop")) return;
+  e.preventDefault();
+});
+
 $("dialogCancel").addEventListener("click", closeDelete);
 $("dialogConfirm").addEventListener("click", confirmDelete);
 $("dialog").addEventListener("click", (e) => {
   if (e.target === $("dialog")) closeDelete();
 });
+$("youtubeCancel").addEventListener("click", closeYouTube);
+$("youtubeConfirm").addEventListener("click", confirmYouTube);
+$("youtubeDialog").addEventListener("click", (e) => {
+  if (e.target === $("youtubeDialog")) closeYouTube();
+});
+if ($("youtubeDoneClose")) $("youtubeDoneClose").addEventListener("click", closeYouTube);
+if ($("youtubeRefresh")) {
+  $("youtubeRefresh").addEventListener("click", () => {
+    state.youtubeLoaded = false;
+    loadYouTubeVideos();
+  });
+}
 
 $("epidemicOpen").addEventListener("click", openEpidemic);
 $("epidemicClose").addEventListener("click", closeEpidemic);

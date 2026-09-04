@@ -14,6 +14,7 @@ import wave
 from pathlib import Path
 
 import config
+from script_text import parse_script
 
 _tts_instance = None
 # VITS decoder drops the tail of long strings. Stay well under that limit.
@@ -87,10 +88,30 @@ def _get_tts():
     return _tts_instance
 
 
+def for_speech(text: str) -> str:
+    """Spoken words only. Drops stage cues and marks VITS reads as 'asterisk'."""
+    raw = parse_script(text)["spoken"] or (text or "")
+    raw = (
+        raw.replace("\u201c", '"').replace("\u201d", '"')
+        .replace("\u00ab", '"').replace("\u00bb", '"')
+        .replace("\u201e", '"').replace("\u201f", '"')
+        .replace("\u2018", "'").replace("\u2019", "'")
+        .replace("\u300c", "").replace("\u300d", "")
+        .replace("\u300e", "").replace("\u300f", "")
+    )
+    raw = re.sub(r"\*\*([^*]+)\*\*", r"\1", raw)
+    raw = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", raw)
+    raw = re.sub(r'"([^"\n]*)"', r"\1", raw)
+    raw = raw.replace("*", " ").replace('"', "")
+    raw = re.sub(r"[ \t]+", " ", raw)
+    raw = re.sub(r" *\n *", "\n", raw)
+    return raw.strip()
+
+
 def split_narration(text: str, max_chars: int = None) -> list:
     """Split on sentence boundaries, then pack until max_chars."""
     max_chars = int(max_chars or _MAX_CHUNK_CHARS)
-    text = re.sub(r"\s+", " ", (text or "").strip())
+    text = re.sub(r"\s+", " ", for_speech(text))
     if not text:
         return []
     sentences = re.split(r"(?<=[.!?])\s+", text)
@@ -132,6 +153,31 @@ def _split_long_sentence(sentence: str, max_chars: int) -> list:
     return pieces
 
 
+def _speech_jobs(text: str) -> list:
+    """('speech', chunk) and ('silence', ms) in script order."""
+    pack = parse_script(text)
+    jobs = []
+    for seg in pack["segments"]:
+        if seg["kind"] == "speech":
+            for chunk in split_narration(seg["text"]):
+                jobs.append(("speech", chunk))
+        elif seg["kind"] == "silence":
+            jobs.append(("silence", int(seg.get("ms") or 1200)))
+        elif seg["kind"] == "sfx":
+            jobs.append(("silence", 550))
+    if jobs:
+        return jobs
+    return [("speech", chunk) for chunk in split_narration(text)]
+
+
+def _write_silence(path: Path, params, ms: int) -> None:
+    n = max(1, int(params.framerate * max(int(ms), 1) / 1000.0))
+    frames = b"\x00" * (n * params.sampwidth * params.nchannels)
+    with wave.open(str(path), "wb") as dest:
+        dest.setparams(params)
+        dest.writeframes(frames)
+
+
 def _concat_wavs(paths: list, out_path: Path, gap_ms: int = _GAP_MS) -> None:
     params = None
     frames = []
@@ -169,31 +215,59 @@ def narrate(text: str, out_path: Path, speaker: str = None) -> Path:
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    chunks = split_narration(text)
-    if not chunks:
+    jobs = _speech_jobs(text)
+    if not jobs:
         raise ValueError("narrate() got empty text")
 
-    if len(chunks) == 1:
-        tts.tts_to_file(text=chunks[0], speaker=speaker, file_path=str(out_path))
+    speech_jobs = [j for j in jobs if j[0] == "speech"]
+    if len(jobs) == 1 and jobs[0][0] == "speech":
+        tts.tts_to_file(text=jobs[0][1], speaker=speaker, file_path=str(out_path))
         print(f"[tts] saved narration -> {out_path} ({_wav_seconds(out_path):.1f}s)")
         return out_path
 
-    piece_paths = []
-    for i, chunk in enumerate(chunks, start=1):
+    speech_files = {}
+    params = None
+    speech_n = 0
+    for i, (kind, payload) in enumerate(jobs, start=1):
+        if kind != "speech":
+            continue
         piece = out_path.parent / f"{out_path.stem}_chunk{i:02d}.wav"
-        print(f"[tts] chunk {i}/{len(chunks)} ({len(chunk)} chars)")
-        tts.tts_to_file(text=chunk, speaker=speaker, file_path=str(piece))
+        speech_n += 1
+        print(f"[tts] chunk {speech_n}/{len(speech_jobs)} ({len(payload)} chars)")
+        tts.tts_to_file(text=payload, speaker=speaker, file_path=str(piece))
+        speech_files[i] = piece
+        if params is None:
+            with wave.open(str(piece), "rb") as src:
+                params = src.getparams()
+
+    piece_paths = []
+    for i, (kind, payload) in enumerate(jobs, start=1):
+        if kind == "speech":
+            piece_paths.append(speech_files[i])
+            continue
+        if params is None:
+            continue
+        piece = out_path.parent / f"{out_path.stem}_chunk{i:02d}.wav"
+        _write_silence(piece, params, int(payload))
+        print(f"[tts] pause {int(payload)}ms")
         piece_paths.append(piece)
 
-    _concat_wavs(piece_paths, out_path)
+    if not piece_paths:
+        raise ValueError("narrate() got empty text")
+    if len(piece_paths) == 1:
+        Path(piece_paths[0]).replace(out_path)
+        print(f"[tts] saved narration -> {out_path} ({_wav_seconds(out_path):.1f}s)")
+        return out_path
+
+    _concat_wavs(piece_paths, out_path, gap_ms=0)
     for piece in piece_paths:
         try:
             piece.unlink()
         except OSError:
             pass
     seconds = _wav_seconds(out_path)
-    words = len(text.split())
-    print(f"[tts] saved narration -> {out_path} ({seconds:.1f}s, {words} words, {len(chunks)} chunks)")
+    words = len(for_speech(text).split())
+    print(f"[tts] saved narration -> {out_path} ({seconds:.1f}s, {words} words, {len(speech_jobs)} chunks)")
     return out_path
 
 

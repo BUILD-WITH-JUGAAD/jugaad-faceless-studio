@@ -34,12 +34,14 @@ print("[run] starting pipeline", flush=True)
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 print("[run] loading config", flush=True)
 import config
 print("[run] loading tts", flush=True)
-from tts_engine import narrate, resolve_voice
+from tts_engine import for_speech, narrate, resolve_voice
+from sfx_engine import overlays_for_script
 print("[run] loading captions", flush=True)
 from captions_engine import transcribe_with_word_timestamps, captions_from_script
 print("[run] loading broll", flush=True)
@@ -131,6 +133,27 @@ def parse_cli(argv):
             config.TTS_SPEAKER = speaker
             overrides["voice"] = speaker
             print("[run] voice {0}".format(speaker))
+        elif key in {"ref", "reference", "reference_image"}:
+            path = Path(value).expanduser()
+            if not path.is_absolute():
+                path = (config.ROOT / path).resolve()
+            config.REFERENCE_IMAGE = str(path)
+            overrides["ref"] = str(path)
+            print("[run] reference image {0}".format(path))
+        elif key in {"ref_role", "reference_role"}:
+            config.REFERENCE_ROLE = value.strip().lower()
+            overrides["ref_role"] = config.REFERENCE_ROLE
+            print("[run] reference role {0}".format(config.REFERENCE_ROLE))
+        elif key == "board":
+            stem = re.sub(r"[^a-zA-Z0-9._-]+", "", value).strip("._")
+            path = (config.AI_IMAGE_DIR / stem).resolve()
+            root = config.AI_IMAGE_DIR.resolve()
+            if stem and path.is_dir() and (path == root or root in path.parents or path.parent == root):
+                config.REUSE_BOARD_DIR = str(path)
+                overrides["board"] = stem
+                print("[run] reusing board {0}".format(path))
+            else:
+                print("[run] ignoring unknown board {0}".format(value))
         elif key in {"size", "aspect", "aspect_ratio"}:
             w, h = config.apply_aspect_ratio(value)
             overrides["size"] = value
@@ -150,7 +173,7 @@ def parse_cli(argv):
 
 
 def _audio_payload(text: str, speaker: str) -> str:
-    return "SPEAKER={0}\n{1}".format(speaker, text)
+    return "SPEAKER={0}\n{1}".format(speaker, for_speech(text))
 
 
 def _audio_is_current(audio_path: Path, text: str, speaker: str) -> bool:
@@ -217,7 +240,9 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
 
         # 2. captions from the written story, timed to the full voiceover
         words = _words_for(audio_path)
+        spoken = for_speech(part["text"])
         chunks = captions_from_script(part["text"], duration, words, words_per_chunk=2)
+        sfx_overlays = overlays_for_script(part["text"], duration)
 
         # 3–4. visuals + assembly
         out_path = config.OUTPUT_DIR / f"{stem}.mp4"
@@ -236,7 +261,7 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
                 raise RuntimeError(
                     f"No Pexels clips found. Check PEXELS_API_KEY and broll_query for {stem}"
                 )
-            times = visual_beat_times(part["text"], len(clip_paths), words, duration)
+            times = visual_beat_times(spoken, len(clip_paths), words, duration)
             timed_clips = [
                 {"path": path, "start": start, "end": end}
                 for path, (start, end) in zip(clip_paths, times)
@@ -247,6 +272,7 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
                 caption_chunks=chunks,
                 out_path=out_path,
                 part_label=label,
+                sfx_overlays=sfx_overlays,
             )
         elif video_type == "ai_video":
             clips = generate_video_storyboard(
@@ -265,6 +291,7 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
                 caption_chunks=chunks,
                 out_path=out_path,
                 part_label=label,
+                sfx_overlays=sfx_overlays,
             )
         else:
             story_dir = config.AI_IMAGE_DIR / stem
@@ -283,6 +310,7 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
                 caption_chunks=chunks,
                 out_path=out_path,
                 part_label=label,
+                sfx_overlays=sfx_overlays,
             )
 
     print(f"\nDone. {len(parts)} video(s) in {config.OUTPUT_DIR}/")

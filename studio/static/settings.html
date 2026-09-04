@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=8" />
+  <link rel="stylesheet" href="/app.css?v=18" />
 </head>
 <body class="page">
   <div class="grain" aria-hidden="true"></div>
@@ -60,11 +60,38 @@
         <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Get an OpenAI API key</a>
         <button type="button" class="clear-key" data-key="openai">Remove</button>
       </label>
+      <label class="field deck">
+        <span>Google client ID <small id="google_client_idHint"></small></span>
+        <input id="google_client_id" type="text" autocomplete="off" spellcheck="false" placeholder="YouTube upload — OAuth client ID" />
+        <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Google Cloud credentials</a>
+        <button type="button" class="clear-key" data-key="google_client_id">Remove</button>
+      </label>
+      <label class="field deck">
+        <span>Google client secret <small id="google_client_secretHint"></small></span>
+        <input id="google_client_secret" type="password" autocomplete="off" spellcheck="false" placeholder="OAuth client secret" />
+        <button type="button" class="clear-key" data-key="google_client_secret">Remove</button>
+      </label>
       <p class="auth-error" id="keysError" hidden></p>
       <button class="go auth-go" type="submit">Save keys</button>
       <p class="form-note" id="keysNote" hidden></p>
     </form>
+
+    <section class="youtube-box deck" id="youtubeBox">
+      <p class="dialog-kicker">YouTube</p>
+      <h2>Publish cuts to your channel</h2>
+      <p class="youtube-badge" id="youtubeBadge">Not connected</p>
+      <p class="form-note" id="youtubeStatus">Save the Google client, then connect.</p>
+      <div id="youtubeSetup">
+        <p class="dialog-copy">Enable <strong>YouTube Data API v3</strong>, create a Web OAuth client, and add this exact redirect URI:</p>
+        <p class="youtube-redirect" id="youtubeRedirect">http://127.0.0.1:8787/youtube/callback</p>
+        <p class="dialog-copy">Save the client id and secret above, then connect. Uploads stay unlisted unless you choose otherwise. Reconnect if you connected before list / edit / delete was added.</p>
+      </div>
+      <div class="youtube-actions">
+        <a class="go auth-go" id="youtubeConnect" href="/api/youtube/connect">Connect YouTube</a>
+        <button type="button" class="clear-key" id="youtubeDisconnect" hidden>Disconnect</button>
+      </div>
+    </section>
   </main>
-  <script src="/settings.js?v=7"></script>
+  <script src="/settings.js?v=10"></script>
 </body>
 </html>

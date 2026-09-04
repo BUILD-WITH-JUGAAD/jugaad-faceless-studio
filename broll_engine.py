@@ -164,10 +164,11 @@ def queries_for_beat(beat: str, setting: str = "") -> tuple:
     return queries[:5], need
 
 
-def _rejected(slug: str) -> str:
+def _rejected(slug: str, allow: set = None) -> str:
     hay = slug.lower()
+    allow = {str(a).lower() for a in (allow or set()) if a}
     for bad in _REJECT:
-        if bad in hay:
+        if bad in hay and bad not in allow:
             return bad
     return ""
 
@@ -177,7 +178,8 @@ def score_video(video: dict, query: str, need: set, setting: str) -> float:
     hay = _tokens(slug.replace("-", " "))
     if not hay:
         return -50.0
-    banned = _rejected(slug)
+    allow = _tokens(query) | set(need or ()) | _tokens(setting)
+    banned = _rejected(slug, allow)
     if banned:
         return -100.0
 
@@ -274,11 +276,18 @@ def _download(file_info, out_path: Path) -> Path:
     return out_path
 
 
+def _visual_keys(part: dict) -> list:
+    keys = part.get("broll_queries") or part.get("image_prompts") or []
+    return [str(k).strip() for k in keys if str(k).strip()]
+
+
 def _beat_list(part: dict, duration: float) -> list:
     from image_engine import pack_beats
+    from tts_engine import for_speech
     target = int(max(6, min(12, round(float(duration) / 14.0))))
-    beats = pack_beats(part["text"], target=target)
-    return beats or [part["text"][:180]]
+    text = for_speech(part["text"])
+    beats = pack_beats(text, target=target)
+    return beats or [text[:180]]
 
 
 def fetch_story_broll(part: dict, dest_dir: Path, stem: str, duration: float) -> list:
@@ -289,11 +298,18 @@ def fetch_story_broll(part: dict, dest_dir: Path, stem: str, duration: float) ->
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     setting = (part.get("broll_query") or "").strip()
-    beats = _beat_list(part, duration)
+    keys = _visual_keys(part)
+    cap = int(getattr(config, "BROLL_CLIP_COUNT", 12) or 12)
+    beats = keys[:cap] if keys else _beat_list(part, duration)
     plan = []
     for beat in beats:
         queries, need = queries_for_beat(beat, setting)
-        plan.append({"beat": beat, "queries": queries, "need": sorted(need)})
+        extras = [q.strip() for q in str(beat).split("|") if q.strip()] if keys else []
+        if extras:
+            queries = extras + [q for q in queries if q not in extras]
+            for extra in extras:
+                need |= _tokens(extra)
+        plan.append({"beat": beat, "queries": queries[:6], "need": sorted(need)})
 
     manifest_path = dest_dir / f"{stem}_broll.json"
     existing = sorted(dest_dir.glob(f"{stem}_broll_*.mp4"))

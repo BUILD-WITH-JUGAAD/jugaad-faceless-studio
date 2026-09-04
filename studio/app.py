@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,8 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from typing import List, Optional, Union
+
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -39,12 +42,24 @@ from epidemic_engine import open_media as epidemic_open_media
 from epidemic_engine import open_preview as epidemic_open_preview
 from epidemic_engine import rewrite_hls as epidemic_rewrite_hls
 from music_engine import list_music_tracks
+from youtube_engine import YouTubeError
+from youtube_engine import auth_url as youtube_auth_url
+from youtube_engine import client_credentials as youtube_client
+from youtube_engine import delete_video as youtube_delete
+from youtube_engine import exchange_code as youtube_exchange
+from youtube_engine import list_videos as youtube_list
+from youtube_engine import redirect_uri as youtube_redirect
+from youtube_engine import update_video as youtube_update
+from youtube_engine import upload_video as youtube_upload
 from story_engine import (
     StoryError,
+    derive_visuals,
     effective_setting,
     effective_title,
     generate_story,
     ollama_status,
+    parse_visuals,
+    visual_to_image_beat,
 )
 
 from tts_engine import list_voices, resolve_voice, voice_preview_path
@@ -166,6 +181,10 @@ def _user_stems(user_id: int) -> set:
         claimed = {uid for uid in owners.get(path.stem, set()) if uid is not None}
         if user_id in claimed or not claimed:
             visible.add(path.stem)
+    for stem in _disk_stems():
+        claimed = {uid for uid in owners.get(stem, set()) if uid is not None}
+        if user_id in claimed or not claimed:
+            visible.add(stem)
     return visible
 
 
@@ -219,6 +238,7 @@ def _user_boards(user_id: int) -> list:
             "panels": panels,
             "prompt": job.get("prompt") or "",
             "setting": job.get("setting") or "",
+            "visuals": job.get("visuals") or [],
             "model": job.get("model") or "comic",
             "size": job.get("size") or "9:16",
             "mtime": _job_path(job["id"]).stat().st_mtime if _job_path(job["id"]).exists() else 0,
@@ -231,6 +251,14 @@ def _seed_for(stem: str) -> int:
     return int(hashlib.md5(stem.encode("utf-8")).hexdigest()[:8], 16) % 100000
 
 
+def _visual_list(raw) -> list:
+    if isinstance(raw, list):
+        text = "\n".join(str(x) for x in raw)
+    else:
+        text = str(raw or "")
+    return parse_visuals(text)[:16]
+
+
 class GenerateBody(BaseModel):
     prompt: str = Field(..., min_length=20)
     model: str = "live"
@@ -238,7 +266,11 @@ class GenerateBody(BaseModel):
     size: str = "9:16"
     title: str = ""
     setting: str = ""
+    visuals: Union[str, List[str]] = ""
     voice: str = ""
+    ref: str = ""
+    ref_role: str = "creature"
+    board: str = ""
     length: str = "youtube"
     seconds: int = 180
 
@@ -250,12 +282,15 @@ class EpidemicImportBody(BaseModel):
 
 
 class ImageBody(BaseModel):
-    prompt: str = Field(..., min_length=20)
+    prompt: str = Field(..., min_length=8)
     model: str = "comic"
     size: str = "9:16"
     title: str = ""
     setting: str = ""
+    visuals: Union[str, List[str]] = ""
     panels: int = 0
+    ref: str = ""
+    ref_role: str = "creature"
 
 
 class StoryExpandBody(BaseModel):
@@ -264,6 +299,21 @@ class StoryExpandBody(BaseModel):
     setting: str = ""
     seconds: int = 180
     provider: str = "ollama"
+    mode: str = "story"
+
+
+class YouTubeUploadBody(BaseModel):
+    title: str = ""
+    description: str = ""
+    privacy: str = "unlisted"
+    shorts: bool = True
+    made_for_kids: bool = False
+
+
+class YouTubeUpdateBody(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    privacy: str = ""
 
 
 def _slug(text: str, fallback: str) -> str:
@@ -292,7 +342,26 @@ def _safe_name(name: str) -> str:
     return name
 
 
-def _options(user_id: int) -> dict:
+def _ref_file(name: str) -> Path:
+    name = _safe_name(name)
+    path = config.REFS_DIR / name
+    if not path.exists() or not _inside(path, config.REFS_DIR):
+        raise HTTPException(404, "Reference image not found")
+    return path
+
+
+def _youtube_public(keys: dict, base_url: str = "") -> dict:
+    tokens = auth.parse_youtube_tokens(keys.get("youtube") or "")
+    client_id, secret = youtube_client(keys)
+    return {
+        "enabled": bool(client_id and secret),
+        "connected": bool(tokens.get("refresh_token")),
+        "channel": (tokens.get("channel") or ""),
+        "redirect": youtube_redirect(base_url),
+    }
+
+
+def _options(user_id: int, base_url: str = "") -> dict:
     tracks = []
     for path in list_music_tracks():
         tracks.append({
@@ -300,18 +369,7 @@ def _options(user_id: int) -> dict:
             "name": path.name,
             "preview": "/media/music/{0}".format(path.name),
         })
-    allowed = _user_stems(user_id)
-    library = []
-    for path in sorted(config.OUTPUT_DIR.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True):
-        if path.stem not in allowed:
-            continue
-        library.append({
-            "name": path.stem,
-            "file": path.name,
-            "url": "/media/output/{0}".format(path.name),
-            "bytes": path.stat().st_size,
-            "mtime": path.stat().st_mtime,
-        })
+    library = _library_items(user_id)
     keys = auth.get_keys(user_id)
     return {
         "brand": "JUGAAD",
@@ -359,6 +417,7 @@ def _options(user_id: int) -> dict:
                 or (getattr(config, "OPENAI_API_KEY", "") or "").strip()
             )
         },
+        "youtube": _youtube_public(keys, base_url),
         "story": _story_options(user_id, keys),
         "keys": auth.keys_public(user_id),
         "generate": {
@@ -373,7 +432,7 @@ def _options(user_id: int) -> dict:
         "images": {
             "enabled": True,
             "hint": (
-                "Pollinations draws the panels here. No TTS. A key in Settings helps if the free pool is busy."
+                "Pollinations draws the panels here. A short prompt is enough — no full story. A key in Settings helps if the free pool is busy."
                 + (
                     " Files on this host vanish if the box sleeps — generate locally to keep them."
                     if os.getenv("RENDER")
@@ -455,6 +514,7 @@ def api_me(request: Request):
         "email": user["email"],
         "name": user["name"],
         "keys": auth.keys_public(user["id"]),
+        "youtube": _youtube_public(auth.get_keys(user["id"]), str(request.base_url)),
     }
 
 
@@ -517,6 +577,7 @@ def api_story_expand(request: Request, body: StoryExpandBody):
                     title=body.title,
                     setting=body.setting,
                     seconds=body.seconds,
+                    mode=body.mode,
                 )
         else:
             pack = generate_story(
@@ -525,6 +586,7 @@ def api_story_expand(request: Request, body: StoryExpandBody):
                 title=body.title,
                 setting=body.setting,
                 seconds=body.seconds,
+                mode=body.mode,
             )
     except StoryError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail)
@@ -533,6 +595,7 @@ def api_story_expand(request: Request, body: StoryExpandBody):
         "text": pack["text"],
         "title": pack.get("title") or "",
         "setting": pack.get("setting") or "",
+        "visuals": pack.get("visuals") or [],
         "provider": provider,
     }
 
@@ -543,17 +606,230 @@ def api_story_derive(request: Request, body: StoryExpandBody):
     text = (body.idea or "").strip()
     if not text:
         raise HTTPException(400, "Story is empty.")
+    setting = effective_setting(text, body.setting)
     return {
         "ok": True,
         "title": effective_title(text, body.title),
-        "setting": effective_setting(text, body.setting),
+        "setting": setting,
+        "visuals": derive_visuals(text, setting),
     }
 
 
 @app.get("/api/options")
 def api_options(request: Request):
     user = _require_user(request)
-    return _options(user["id"])
+    return _options(user["id"], str(request.base_url))
+
+
+def _youtube_http(exc: YouTubeError):
+    raise HTTPException(status_code=exc.status, detail=str(exc))
+
+
+def _youtube_map_path(user_id: int) -> Path:
+    folder = STUDIO / "data" / "youtube"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / "{0}.json".format(int(user_id))
+
+
+def _youtube_map(user_id: int) -> dict:
+    path = _youtube_map_path(user_id)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _youtube_remember(user_id: int, stem: str, video: dict) -> None:
+    stem = (stem or "").strip()
+    video_id = (video or {}).get("id") or ""
+    if not stem or not video_id:
+        return
+    data = _youtube_map(user_id)
+    data[stem] = {
+        "id": video_id,
+        "url": video.get("url") or "https://youtu.be/{0}".format(video_id),
+        "title": video.get("title") or stem,
+        "privacy": video.get("privacy") or "",
+    }
+    _youtube_map_path(user_id).write_text(json.dumps(data, indent=2))
+
+
+def _youtube_forget(user_id: int, video_id: str) -> None:
+    video_id = (video_id or "").strip()
+    if not video_id:
+        return
+    data = _youtube_map(user_id)
+    kept = {k: v for k, v in data.items() if (v or {}).get("id") != video_id}
+    _youtube_map_path(user_id).write_text(json.dumps(kept, indent=2))
+
+
+def _youtube_creds(user: dict):
+    extra = auth.apply_user_keys(user["id"])
+    if extra.get("GOOGLE_CLIENT_ID"):
+        config.GOOGLE_CLIENT_ID = extra["GOOGLE_CLIENT_ID"]
+    if extra.get("GOOGLE_CLIENT_SECRET"):
+        config.GOOGLE_CLIENT_SECRET = extra["GOOGLE_CLIENT_SECRET"]
+    tokens = auth.youtube_tokens(user["id"])
+    if not tokens.get("refresh_token"):
+        raise HTTPException(401, "Connect YouTube in Settings first.")
+    keys = auth.get_keys(user["id"])
+    client_id, secret = youtube_client(keys)
+    if not client_id or not secret:
+        raise HTTPException(400, "Save a Google client id and secret first.")
+    return tokens, client_id, secret
+
+
+@app.get("/api/youtube/connect")
+def api_youtube_connect(request: Request):
+    user = _require_user(request)
+    keys = auth.get_keys(user["id"])
+    extra = auth.apply_user_keys(user["id"])
+    if extra.get("GOOGLE_CLIENT_ID"):
+        config.GOOGLE_CLIENT_ID = extra["GOOGLE_CLIENT_ID"]
+    if extra.get("GOOGLE_CLIENT_SECRET"):
+        config.GOOGLE_CLIENT_SECRET = extra["GOOGLE_CLIENT_SECRET"]
+    client_id, secret = youtube_client(keys)
+    if not client_id or not secret:
+        return RedirectResponse("/settings?youtube=needclient", status_code=302)
+    redirect = youtube_redirect(str(request.base_url))
+    state = secrets.token_urlsafe(24)
+    request.session["youtube_oauth"] = state
+    request.session["youtube_redirect"] = redirect
+    return RedirectResponse(youtube_auth_url(client_id, redirect, state), status_code=302)
+
+
+@app.get("/youtube/callback")
+def youtube_callback(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if request.query_params.get("error"):
+        return RedirectResponse("/settings?youtube=denied", status_code=302)
+    expected = request.session.get("youtube_oauth") or ""
+    state = request.query_params.get("state") or ""
+    if not expected or state != expected:
+        return RedirectResponse("/settings?youtube=state", status_code=302)
+    code = (request.query_params.get("code") or "").strip()
+    if not code:
+        return RedirectResponse("/settings?youtube=denied", status_code=302)
+    keys = auth.get_keys(user["id"])
+    extra = auth.apply_user_keys(user["id"])
+    if extra.get("GOOGLE_CLIENT_ID"):
+        config.GOOGLE_CLIENT_ID = extra["GOOGLE_CLIENT_ID"]
+    if extra.get("GOOGLE_CLIENT_SECRET"):
+        config.GOOGLE_CLIENT_SECRET = extra["GOOGLE_CLIENT_SECRET"]
+    client_id, secret = youtube_client(keys)
+    redirect = request.session.get("youtube_redirect") or youtube_redirect(str(request.base_url))
+    try:
+        tokens = youtube_exchange(code, client_id, secret, redirect)
+    except YouTubeError:
+        return RedirectResponse("/settings?youtube=error", status_code=302)
+    request.session.pop("youtube_oauth", None)
+    request.session.pop("youtube_redirect", None)
+    auth.save_youtube_tokens(user["id"], tokens)
+    return RedirectResponse("/settings?youtube=ok", status_code=302)
+
+
+@app.post("/api/youtube/disconnect")
+def api_youtube_disconnect(request: Request):
+    user = _require_user(request)
+    return {"ok": True, "keys": auth.save_youtube_tokens(user["id"], {})}
+
+
+@app.post("/api/library/{name}/youtube")
+def api_youtube_upload(request: Request, name: str, body: YouTubeUploadBody):
+    user = _require_user(request)
+    name = _safe_name(name)
+    stem = Path(name).stem
+    if not _user_owns_stem(user["id"], stem):
+        raise HTTPException(404, "Video not found")
+    video = config.OUTPUT_DIR / (stem + ".mp4")
+    if not video.exists() or not _inside(video, config.OUTPUT_DIR):
+        raise HTTPException(404, "Video not found")
+    tokens, client_id, secret = _youtube_creds(user)
+    title = (body.title or stem.replace("_", " ")).strip()
+    try:
+        result = youtube_upload(
+            video,
+            tokens,
+            client_id,
+            secret,
+            title=title,
+            description=body.description,
+            privacy=body.privacy,
+            shorts=body.shorts,
+            made_for_kids=body.made_for_kids,
+        )
+    except YouTubeError as exc:
+        _youtube_http(exc)
+    if result.get("tokens"):
+        auth.save_youtube_tokens(user["id"], result["tokens"])
+    _youtube_remember(user["id"], stem, result)
+    return {
+        "ok": True,
+        "id": result.get("id") or "",
+        "url": result.get("url") or "",
+        "title": result.get("title") or title,
+        "privacy": result.get("privacy") or body.privacy,
+    }
+
+
+@app.get("/api/youtube/videos")
+def api_youtube_videos(request: Request):
+    user = _require_user(request)
+    tokens, client_id, secret = _youtube_creds(user)
+    try:
+        result = youtube_list(tokens, client_id, secret)
+    except YouTubeError as exc:
+        _youtube_http(exc)
+    if result.get("tokens"):
+        auth.save_youtube_tokens(user["id"], result["tokens"])
+    return {"ok": True, "videos": result.get("videos") or []}
+
+
+@app.patch("/api/youtube/videos/{video_id}")
+def api_youtube_update(request: Request, video_id: str, body: YouTubeUpdateBody):
+    user = _require_user(request)
+    tokens, client_id, secret = _youtube_creds(user)
+    try:
+        result = youtube_update(
+            video_id,
+            tokens,
+            client_id,
+            secret,
+            title=body.title,
+            description=body.description,
+            privacy=body.privacy,
+        )
+    except YouTubeError as exc:
+        _youtube_http(exc)
+    if result.get("tokens"):
+        auth.save_youtube_tokens(user["id"], result["tokens"])
+    video = result.get("video") or {}
+    if video.get("id"):
+        mapped = _youtube_map(user["id"])
+        for stem, row in mapped.items():
+            if (row or {}).get("id") == video["id"]:
+                _youtube_remember(user["id"], stem, video)
+                break
+    return {"ok": True, "video": video}
+
+
+@app.delete("/api/youtube/videos/{video_id}")
+def api_youtube_remove(request: Request, video_id: str):
+    user = _require_user(request)
+    tokens, client_id, secret = _youtube_creds(user)
+    try:
+        result = youtube_delete(video_id, tokens, client_id, secret)
+    except YouTubeError as exc:
+        _youtube_http(exc)
+    if result.get("tokens"):
+        auth.save_youtube_tokens(user["id"], result["tokens"])
+    _youtube_forget(user["id"], video_id)
+    return {"ok": True, "id": video_id}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -592,6 +868,7 @@ def api_generate(request: Request, body: GenerateBody):
         job_id = uuid.uuid4().hex[:8]
         title = effective_title(prompt, body.title)
         setting = effective_setting(prompt, body.setting)
+        visuals = _visual_list(body.visuals) or derive_visuals(prompt, setting)
         stem = _slug(title, "jugaad_{0}".format(job_id))
         job = {
             "id": job_id,
@@ -601,11 +878,15 @@ def api_generate(request: Request, body: GenerateBody):
             "model": body.model,
             "music": body.music or "random",
             "voice": resolve_voice(body.voice),
+            "ref": (body.ref or "").strip(),
+            "ref_role": (body.ref_role or "creature").strip().lower() or "creature",
+            "board": (body.board or "").strip(),
             "size": body.size or "9:16",
             "length": body.length or "youtube",
             "seconds": seconds,
             "title": title,
             "setting": setting,
+            "visuals": visuals,
             "stem": stem,
             "created": datetime.now().isoformat(timespec="seconds"),
             "log": "",
@@ -625,8 +906,8 @@ def api_images_generate(request: Request, body: ImageBody):
     global _current
     user = _require_user(request)
     prompt = (body.prompt or "").strip()
-    if len(prompt.split()) < 8:
-        raise HTTPException(400, "Write a fuller story — at least a few sentences.")
+    if len(prompt.split()) < 3:
+        raise HTTPException(400, "Write a short prompt — a scene or subject is enough.")
     style = (body.model or "comic").strip().lower()
     if style not in _IMAGE_STYLES:
         raise HTTPException(400, "Pick comic, cartoon, or anime.")
@@ -644,6 +925,7 @@ def api_images_generate(request: Request, body: ImageBody):
         job_id = uuid.uuid4().hex[:8]
         title = effective_title(prompt, body.title)
         setting = effective_setting(prompt, body.setting)
+        visuals = _visual_list(body.visuals)
         stem = _slug(title, "board_{0}".format(job_id))
         folder = config.AI_IMAGE_DIR / stem
         video = config.OUTPUT_DIR / (stem + ".mp4")
@@ -659,6 +941,9 @@ def api_images_generate(request: Request, body: ImageBody):
             "size": body.size or "9:16",
             "title": title,
             "setting": setting,
+            "visuals": visuals,
+            "ref": (body.ref or "").strip(),
+            "ref_role": (body.ref_role or "creature").strip().lower() or "creature",
             "stem": stem,
             "panels": [],
             "panel_count": panels,
@@ -683,11 +968,16 @@ def _run_image_job(job_id: str) -> None:
     log_lines = ["Drawing panels…"]
     prev_key = config.POLLINATIONS_API_KEY
     prev_size = (config.VIDEO_WIDTH, config.VIDEO_HEIGHT)
+    prev_ref = getattr(config, "REFERENCE_IMAGE", "")
+    prev_role = getattr(config, "REFERENCE_ROLE", "creature")
     user_id = job.get("user_id")
     try:
         extra = auth.apply_user_keys(int(user_id)) if user_id else {}
         if extra.get("POLLINATIONS_API_KEY"):
             config.POLLINATIONS_API_KEY = extra["POLLINATIONS_API_KEY"]
+        if job.get("ref"):
+            config.REFERENCE_IMAGE = str(_ref_file(job["ref"]))
+        config.REFERENCE_ROLE = (job.get("ref_role") or "creature").strip().lower() or "creature"
         try:
             config.apply_aspect_ratio(job.get("size") or "9:16")
         except ValueError:
@@ -705,16 +995,24 @@ def _run_image_job(job_id: str) -> None:
             current["log"] = "\n".join(log_lines)[-12000:]
             _write_job(current)
 
+        visuals = [v for v in (job.get("visuals") or []) if str(v).strip()]
+        if count and visuals:
+            visuals = visuals[:count]
+        part = {
+            "text": job["prompt"],
+            "broll_query": job.get("setting") or "",
+        }
+        if visuals:
+            part["image_prompts"] = [visual_to_image_beat(v) for v in visuals]
+
         generate_board(
-            {
-                "text": job["prompt"],
-                "broll_query": job.get("setting") or "",
-            },
+            part,
             out_dir,
             style=job["model"],
             character_seed=_seed_for(stem),
             panel_count=count,
             on_panel=on_panel,
+            story=job.get("prompt") or "",
         )
         job = _read_job(job_id)
         job["status"] = "done"
@@ -729,6 +1027,8 @@ def _run_image_job(job_id: str) -> None:
     finally:
         config.POLLINATIONS_API_KEY = prev_key
         config.VIDEO_WIDTH, config.VIDEO_HEIGHT = prev_size
+        config.REFERENCE_IMAGE = prev_ref
+        config.REFERENCE_ROLE = prev_role
         with _lock:
             if _current == job_id:
                 _current = None
@@ -736,16 +1036,27 @@ def _run_image_job(job_id: str) -> None:
 
 def _write_script(job: dict) -> Path:
     setting = job.get("setting") or "dark cinematic night village"
+    visuals = [v for v in (job.get("visuals") or []) if str(v).strip()]
+    extra = ""
+    if visuals:
+        extra = (
+            '    "image_prompts": {0},\n'
+            '    "broll_queries": {1},\n'
+        ).format(
+            repr([visual_to_image_beat(v) for v in visuals]),
+            repr(visuals),
+        )
     path = SCRIPTS / "{0}.py".format(job["stem"])
     path.write_text(
         "VIDEO_TYPE = {0}\n"
         "PARTS = [{{\n"
         "    \"text\": {1},\n"
         "    \"broll_query\": {2},\n"
-        "}}]\n".format(
+        "{3}}}]\n".format(
             repr(job["model"]),
             repr(job["prompt"]),
             repr(setting),
+            extra,
         )
     )
     return path
@@ -786,6 +1097,12 @@ def _run_job(job_id: str) -> None:
         "size={0}".format(job["size"]),
         "max={0}".format(job.get("seconds") if job.get("seconds") is not None else 180),
     ]
+    if job.get("ref"):
+        cmd.append("ref={0}".format(_ref_file(job["ref"])))
+    if job.get("ref_role"):
+        cmd.append("ref_role={0}".format(job["ref_role"]))
+    if job.get("board"):
+        cmd.append("board={0}".format(job["board"]))
     log_chunks = []
     env = dict(os.environ)
     env["PYTHONUNBUFFERED"] = "1"
@@ -868,43 +1185,196 @@ def _remove_path(path: Path, root: Path, deleted):
         deleted.append(str(path))
 
 
-def _purge_library_stem(stem: str):
-    """Permanently delete a cut and every generated file tied to that stem."""
-    deleted = []
-    files = [
-        (config.OUTPUT_DIR, config.OUTPUT_DIR / (stem + ".mp4")),
-        (config.AUDIO_DIR, config.AUDIO_DIR / (stem + ".wav")),
-        (config.AUDIO_DIR, config.AUDIO_DIR / (stem + ".script.txt")),
-        (config.AUDIO_DIR, config.AUDIO_DIR / (stem + ".trim.wav")),
-        (config.CAPTIONS_DIR, config.CAPTIONS_DIR / (stem + "_words.json")),
-        (config.BROLL_DIR, config.BROLL_DIR / (stem + "_broll.json")),
-        (SCRIPTS, SCRIPTS / (stem + ".py")),
+def _glob_existing(root: Path, pattern: str):
+    if not root.exists():
+        return []
+    return list(root.glob(pattern))
+
+
+def _iter_stem_paths(stem: str):
+    """Every generated file/dir that belongs to this cut name."""
+    if not stem or stem in (".", "..") or "/" in stem or "\\" in stem:
+        return
+    named = [
+        (config.OUTPUT_DIR, stem + ".mp4"),
+        (config.AUDIO_DIR, stem + ".wav"),
+        (config.AUDIO_DIR, stem + ".script.txt"),
+        (config.AUDIO_DIR, stem + ".trim.wav"),
+        (config.CAPTIONS_DIR, stem + "_words.json"),
+        (config.BROLL_DIR, stem + "_broll.json"),
+        (SCRIPTS, stem + ".py"),
     ]
-    for root, path in files:
-        _remove_path(path, root, deleted)
-
-    for path in config.AUDIO_DIR.glob(stem + "_chunk*"):
-        _remove_path(path, config.AUDIO_DIR, deleted)
-    for path in config.BROLL_DIR.glob(stem + "_broll_*"):
-        _remove_path(path, config.BROLL_DIR, deleted)
-
+    for root, name in named:
+        yield root, root / name
+    for path in _glob_existing(config.AUDIO_DIR, stem + "_chunk*"):
+        yield config.AUDIO_DIR, path
+    for path in _glob_existing(config.BROLL_DIR, stem + "_broll_*"):
+        yield config.BROLL_DIR, path
+    for root in (
+        config.OUTPUT_DIR,
+        config.AUDIO_DIR,
+        config.CAPTIONS_DIR,
+        config.BROLL_DIR,
+        config.STILLS_DIR,
+        config.AI_IMAGE_DIR,
+        config.AI_VIDEO_DIR,
+        SCRIPTS,
+    ):
+        for path in _glob_existing(root, stem + "TEMP_MPY*"):
+            yield root, path
     for root in (config.STILLS_DIR, config.AI_IMAGE_DIR, config.AI_VIDEO_DIR):
-        _remove_path(root / stem, root, deleted)
+        yield root, root / stem
+        for path in _glob_existing(root, stem + "_*"):
+            yield root, path
+    pycache = SCRIPTS / "__pycache__"
+    for path in _glob_existing(pycache, stem + "*"):
+        yield SCRIPTS, path
 
+
+def _disk_stems() -> set:
+    """Cut names that still have files on disk, even if the mp4 is gone."""
+    skip = {"voice_previews", "__pycache__", "__init__"}
+    stems = set()
+    if SCRIPTS.exists():
+        for path in SCRIPTS.glob("*.py"):
+            if path.stem not in skip:
+                stems.add(path.stem)
+    if config.AUDIO_DIR.exists():
+        for path in config.AUDIO_DIR.iterdir():
+            if path.name in skip or path.name.startswith("."):
+                continue
+            name = path.name
+            if name.endswith(".script.txt"):
+                stems.add(name[: -len(".script.txt")])
+            elif name.endswith(".trim.wav"):
+                stems.add(name[: -len(".trim.wav")])
+            elif "_chunk" in name:
+                stems.add(name.split("_chunk", 1)[0])
+            elif name.endswith(".wav"):
+                stems.add(path.stem)
+    for folder, marker in (
+        (config.CAPTIONS_DIR, "_words.json"),
+        (config.BROLL_DIR, "_broll"),
+    ):
+        if not folder.exists():
+            continue
+        for path in folder.iterdir():
+            if marker in path.name:
+                stems.add(path.name.split(marker, 1)[0])
+    for folder in (config.STILLS_DIR, config.AI_IMAGE_DIR, config.AI_VIDEO_DIR):
+        if not folder.exists():
+            continue
+        for path in folder.iterdir():
+            if path.name.startswith(".") or path.name in skip:
+                continue
+            stems.add(path.name)
+    if config.OUTPUT_DIR.exists():
+        for path in config.OUTPUT_DIR.iterdir():
+            if "TEMP_MPY" in path.name:
+                stems.add(path.name.split("TEMP_MPY", 1)[0])
+            elif path.suffix.lower() == ".mp4":
+                stems.add(path.stem)
+    return {item for item in stems if item and item not in skip}
+
+
+def _video_jobs_for_stem(stem: str):
+    jobs = []
     for job_path in JOBS_DIR.glob("*.json"):
         try:
             data = json.loads(job_path.read_text())
         except (OSError, ValueError):
             continue
-        if data.get("stem") == stem:
-            _remove_path(job_path, JOBS_DIR, deleted)
+        if data.get("kind") == "images":
+            continue
+        if data.get("stem") != stem:
+            continue
+        jobs.append((job_path, data))
+    return jobs
+
+
+def _stem_mtime(stem: str) -> float:
+    best = 0.0
+    for _root, path in _iter_stem_paths(stem):
+        try:
+            if path.exists():
+                best = max(best, path.stat().st_mtime)
+        except OSError:
+            continue
+    for job_path, _data in _video_jobs_for_stem(stem):
+        try:
+            best = max(best, job_path.stat().st_mtime)
+        except OSError:
+            continue
+    return best
+
+
+def _stem_has_leftovers(stem: str) -> bool:
+    if any(path.exists() for _root, path in _iter_stem_paths(stem)):
+        return True
+    return bool(_video_jobs_for_stem(stem))
+
+
+def _library_items(user_id: int) -> list:
+    allowed = _user_stems(user_id)
+    uploaded = _youtube_map(user_id)
+    items = []
+    seen = set()
+    videos = sorted(
+        config.OUTPUT_DIR.glob("*.mp4"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for path in videos:
+        if path.stem not in allowed:
+            continue
+        seen.add(path.stem)
+        items.append({
+            "name": path.stem,
+            "file": path.name,
+            "url": "/media/output/{0}".format(path.name),
+            "bytes": path.stat().st_size,
+            "mtime": path.stat().st_mtime,
+            "youtube": uploaded.get(path.stem) or None,
+        })
+    leftovers = []
+    for stem in allowed:
+        if stem in seen or not _stem_has_leftovers(stem):
+            continue
+        leftovers.append({
+            "name": stem,
+            "file": stem + ".mp4",
+            "url": None,
+            "bytes": 0,
+            "mtime": _stem_mtime(stem),
+            "orphan": True,
+        })
+    leftovers.sort(key=lambda item: item.get("mtime") or 0, reverse=True)
+    return (items + leftovers)[:24]
+
+
+def _purge_library_stem(stem: str):
+    """Permanently delete a cut and every generated file tied to that stem."""
+    deleted = []
+    seen = set()
+    for root, path in _iter_stem_paths(stem):
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        _remove_path(path, root, deleted)
+
+    for job_path, _data in _video_jobs_for_stem(stem):
+        _remove_path(job_path, JOBS_DIR, deleted)
 
     return deleted
 
 
 def _purge_image_stem(stem: str, user_id: int):
     deleted = []
-    _remove_path(config.AI_IMAGE_DIR / stem, config.AI_IMAGE_DIR, deleted)
+    for root in (config.AI_IMAGE_DIR, config.STILLS_DIR):
+        _remove_path(root / stem, root, deleted)
+        for path in _glob_existing(root, stem + "_*"):
+            _remove_path(path, root, deleted)
     for job_path in JOBS_DIR.glob("*.json"):
         try:
             data = json.loads(job_path.read_text())
@@ -939,9 +1409,6 @@ def api_delete_library(request: Request, name: str):
     name = _safe_name(name)
     stem = Path(name).stem
     if not _user_owns_stem(user["id"], stem):
-        raise HTTPException(404, "Video not found")
-    video = config.OUTPUT_DIR / (stem + ".mp4")
-    if not video.exists() or not _inside(video, config.OUTPUT_DIR):
         raise HTTPException(404, "Video not found")
     deleted = _purge_library_stem(stem)
     if not deleted:
@@ -1065,6 +1532,43 @@ def api_epidemic_import(request: Request, body: EpidemicImportBody):
             return epidemic_import(body.id, title=body.title, kind=body.kind)
     except EpidemicError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc))
+
+
+@app.post("/api/ref/upload")
+async def api_ref_upload(request: Request, file: UploadFile = File(...)):
+    _require_user(request)
+    original = _safe_name(file.filename or "ref.jpg")
+    ext = Path(original).suffix.lower()
+    if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(400, "Use a photo (.jpg, .png, .webp)")
+    raw = await file.read()
+    if len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(400, "Keep the reference under 8 MB.")
+    stem = re.sub(r"[^a-zA-Z0-9._-]+", "_", Path(original).stem).strip("._") or "ref"
+    dest = config.REFS_DIR / (stem + ".jpg")
+    n = 2
+    while dest.exists():
+        dest = config.REFS_DIR / "{0}_{1}.jpg".format(stem, n)
+        n += 1
+    from PIL import Image
+    import io
+    im = Image.open(io.BytesIO(raw))
+    im = im.convert("RGB")
+    im.thumbnail((1280, 1280))
+    im.save(dest, "JPEG", quality=88)
+    return {
+        "ok": True,
+        "id": dest.name,
+        "name": dest.name,
+        "url": "/media/ref/{0}".format(dest.name),
+    }
+
+
+@app.get("/media/ref/{name}")
+def media_ref(request: Request, name: str):
+    _require_user(request)
+    path = _ref_file(name)
+    return FileResponse(str(path), media_type="image/jpeg")
 
 
 @app.post("/api/music/upload")
