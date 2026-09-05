@@ -79,7 +79,7 @@ If `ffmpeg` or `espeak-ng` prints nothing, install them before `pip install`.
 ## Setup
 
 ```bash
-git clone https://github.com/a-M-i-T/jugaad-faceless-studio.git
+git clone https://github.com/buildwithjugaad/jugaad-faceless-studio.git
 cd jugaad-faceless-studio
 
 python3 -m venv venv
