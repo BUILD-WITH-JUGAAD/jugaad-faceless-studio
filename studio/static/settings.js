@@ -1,5 +1,8 @@
 const FIELDS = [
   "pexels",
+  "pixabay",
+  "unsplash",
+  "pixazo",
   "pollinations",
   "epidemic",
   "openai",
@@ -7,14 +10,31 @@ const FIELDS = [
   "google_client_secret",
 ];
 const clear = {};
+const focused = {};
 
 async function api(url, options) {
   const res = await fetch(url, options);
   if (res.status === 401) {
-    window.location.href = "/login";
-    throw new Error("auth");
+    let detail = "";
+    try {
+      detail = String(((await res.clone().json()) || {}).detail || "");
+    } catch (_) {}
+    if (/sign in first/i.test(detail)) {
+      window.location.href = "/login";
+      throw new Error("auth");
+    }
   }
   return res;
+}
+
+function wipeKeyInputs() {
+  FIELDS.forEach((name) => {
+    const input = document.getElementById(name);
+    if (input) input.value = "";
+  });
+  document.querySelectorAll(".autofill-trap input").forEach((el) => {
+    el.value = "";
+  });
 }
 
 function showKeys(keys) {
@@ -22,10 +42,19 @@ function showKeys(keys) {
     const info = (keys && keys[name]) || {};
     const hint = document.getElementById(name + "Hint");
     const input = document.getElementById(name);
+    const remove = document.querySelector('.clear-key[data-key="' + name + '"]');
     if (!hint || !input) return;
-    hint.textContent = info.set ? "· " + info.hint : "· not set";
+    const isSet = Boolean(info.set);
+    hint.textContent = isSet ? "· " + (info.hint || "saved") : "· not set";
     input.value = "";
-    input.placeholder = info.set ? "Saved — paste a new value to replace" : input.getAttribute("data-empty") || input.placeholder;
+    if (!input.getAttribute("data-empty")) {
+      input.setAttribute("data-empty", input.placeholder || "");
+    }
+    input.placeholder = isSet
+      ? "Saved — paste a new value to replace"
+      : (input.getAttribute("data-empty") || input.placeholder);
+    if (remove) remove.hidden = !isSet && !clear[name];
+    delete focused[name];
   });
 }
 
@@ -67,13 +96,23 @@ document.getElementById("logout").addEventListener("click", async () => {
   window.location.href = "/login";
 });
 
+FIELDS.forEach((name) => {
+  const input = document.getElementById(name);
+  if (!input) return;
+  input.addEventListener("focus", () => {
+    focused[name] = true;
+  });
+});
+
 document.querySelectorAll(".clear-key").forEach((btn) => {
   if (btn.id === "youtubeDisconnect") return;
   btn.addEventListener("click", () => {
     const name = btn.getAttribute("data-key");
     clear[name] = true;
+    focused[name] = true;
     document.getElementById(name).value = "";
     document.getElementById(name + "Hint").textContent = "· will remove on save";
+    btn.hidden = false;
   });
 });
 
@@ -84,11 +123,23 @@ document.getElementById("keysForm").addEventListener("submit", async (e) => {
   error.hidden = true;
   note.hidden = true;
   const body = {};
+  let changing = 0;
   FIELDS.forEach((name) => {
     const value = document.getElementById(name).value.trim();
-    if (clear[name] && !value) body[name] = null;
-    else if (value) body[name] = value;
+    // Ignore Chrome autofill: only save fields the user focused (or marked Remove).
+    if (clear[name] && !value) {
+      body[name] = null;
+      changing += 1;
+    } else if (value && focused[name]) {
+      body[name] = value;
+      changing += 1;
+    }
   });
+  if (!changing) {
+    note.hidden = false;
+    note.textContent = "Nothing to save. Click a field, paste the key, then Save.";
+    return;
+  }
   const res = await api("/api/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -117,6 +168,11 @@ document.getElementById("youtubeDisconnect").addEventListener("click", async () 
   const me = await (await api("/api/me")).json();
   document.getElementById("who").textContent = me.email || "";
   showKeys(me.keys);
+  // Chrome often fills after paint — wipe again so passwords never stick.
+  wipeKeyInputs();
+  setTimeout(wipeKeyInputs, 50);
+  setTimeout(wipeKeyInputs, 300);
+  setTimeout(wipeKeyInputs, 1000);
   showYouTube((me.keys || {}).youtube, me.youtube);
   const flag = new URLSearchParams(window.location.search).get("youtube");
   const note = document.getElementById("youtubeStatus");

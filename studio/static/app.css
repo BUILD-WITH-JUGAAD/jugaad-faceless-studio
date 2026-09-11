@@ -286,6 +286,54 @@ textarea.visuals {
   min-height: 8.5em;
 }
 
+.shot-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+.shot-card {
+  border: 1px solid var(--line);
+  background: #140f0c;
+  padding: 10px 12px;
+}
+.shot-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.shot-card-head strong { color: var(--ink); font-weight: 600; }
+.shot-meta {
+  margin: 0 0 6px;
+  font-family: Newsreader, Georgia, serif;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+.shot-meta span {
+  display: inline-block;
+  min-width: 4.2rem;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.shot-prompt {
+  margin: 8px 0 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 textarea, input[type="text"], input[type="email"], input[type="password"], input[type="search"] {
   width: 100%;
   background: #140f0c;
@@ -1232,6 +1280,21 @@ a.go { text-decoration: none; color: #1a100a; box-sizing: border-box; }
   font-size: 11px;
   letter-spacing: 0.04em;
   text-decoration: none;
+}
+/* Mask API keys without type=password (Chrome autofills those). */
+.keys-form input.secret-key {
+  -webkit-text-security: disc;
+  text-security: disc;
+}
+.autofill-trap {
+  position: absolute;
+  left: -10000px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 .clear-key {
   display: block;

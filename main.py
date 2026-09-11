@@ -4,12 +4,15 @@ End-to-end pipeline runner.
 For each part of a script:
   1. Generate narration (Coqui TTS, local, free)
   2. Transcribe it for word-level captions (Whisper, local, free)
-  3. Build background (Pexels b-roll, illustrated stills, or paid AI video)
+  3. Build background (stock video/photos, illustrated stills, or AI video)
   4. Assemble the final vertical video (moviepy)
 
 Usage:
     python main.py scripts/popobawa.py
     python main.py scripts/popobawa.py model=live
+    python main.py scripts/popobawa.py model=pixabay
+    python main.py scripts/popobawa.py model=photos
+    python main.py scripts/popobawa.py model=pixazo
     python main.py scripts/popobawa.py model=comic image_model=flux-anime
     python main.py scripts/popobawa.py model=live music=off
     python main.py scripts/popobawa.py music=horror_piano
@@ -48,10 +51,43 @@ print("[run] loading broll", flush=True)
 from broll_engine import fetch_story_broll
 print("[run] loading images", flush=True)
 from image_engine import generate_storyboard, visual_beat_times
+from photo_engine import generate_photo_storyboard
+from pixazo_engine import generate_pixazo_storyboard
+from stock_adapter import (
+    build_planned_stock_photos,
+    build_planned_stock_videos,
+    visual_planner_enabled,
+)
+from illustrated_adapter import build_planned_illustrated_storyboard
+from generative_adapter import (
+    build_planned_ai_video_storyboard,
+    build_planned_pixazo_storyboard,
+)
 from video_engine import generate_video_storyboard
 from visuals_engine import normalize_video_type, trim_wav_to, wav_duration
 from assemble_video import assemble_from_images, assemble_from_videos
 print("[run] libraries ready", flush=True)
+
+
+def _planner_visual_qa(part, spoken, duration, words, assets, provider: str = "") -> None:
+    """Phase 8 diagnostics only — never alters assets or legacy path."""
+    if not visual_planner_enabled():
+        return
+    if not getattr(config, "VISUAL_QA_ENABLED", True):
+        return
+    try:
+        from stock_adapter import plan_enriched_beats
+        from visual_qa import emit_visual_qa
+
+        beats = plan_enriched_beats(part, spoken, duration, words=words)
+        emit_visual_qa(
+            narration_duration=duration,
+            assets=assets or [],
+            beats=beats,
+            provider=provider,
+        )
+    except Exception as exc:
+        print("[VISUAL QA] skipped ({0})".format(exc), flush=True)
 
 
 def load_script_module(path: str):
@@ -99,7 +135,7 @@ def parse_cli(argv):
     if len(argv) < 2:
         print(
             "Usage: python main.py scripts/popobawa.py [series_name] "
-            "model=live|comic|cartoon|anime|ai_video "
+            "model=live|pixabay|photos|comic|cartoon|anime|pixazo|ai_video "
             "[image_model=flux] [video_model=wan-fast] "
             "[music=on|off|random|<track name>] [voice=p326] "
             "[size=9:16|1:1|4:5|16:9|4:3] "
@@ -250,22 +286,47 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
             overrides.get("video_type") or part.get("video_type") or series_type
         )
 
-        if video_type == "live":
-            clip_paths = fetch_story_broll(
-                part,
-                config.BROLL_DIR,
-                stem,
-                duration,
-            )
-            if not clip_paths:
-                raise RuntimeError(
-                    f"No Pexels clips found. Check PEXELS_API_KEY and broll_query for {stem}"
+        if video_type in ("live", "pixabay"):
+            provider = "pixabay" if video_type == "pixabay" else "pexels"
+            source = "Pixabay" if video_type == "pixabay" else "Pexels"
+            key = "PIXABAY_API_KEY" if video_type == "pixabay" else "PEXELS_API_KEY"
+            if visual_planner_enabled():
+                # Phase 6: VisualBeat timeline → per-beat stock search → rank → download
+                timed_clips = build_planned_stock_videos(
+                    part,
+                    config.BROLL_DIR,
+                    stem,
+                    duration,
+                    words=words,
+                    provider=provider,
+                    text=spoken,
                 )
-            times = visual_beat_times(spoken, len(clip_paths), words, duration)
-            timed_clips = [
-                {"path": path, "start": start, "end": end}
-                for path, (start, end) in zip(clip_paths, times)
-            ]
+                _planner_visual_qa(part, spoken, duration, words, timed_clips, provider=provider)
+            else:
+                clip_paths = fetch_story_broll(
+                    part,
+                    config.BROLL_DIR,
+                    stem,
+                    duration,
+                    provider=provider,
+                )
+                if not clip_paths:
+                    raise RuntimeError(
+                        "No {0} clips found. Check {1} and broll_query for {2}".format(
+                            source, key, stem,
+                        )
+                    )
+                times = visual_beat_times(spoken, len(clip_paths), words, duration)
+                timed_clips = [
+                    {"path": path, "start": start, "end": end}
+                    for path, (start, end) in zip(clip_paths, times)
+                ]
+            if not timed_clips:
+                raise RuntimeError(
+                    "No {0} clips found. Check {1} and broll_query for {2}".format(
+                        source, key, stem,
+                    )
+                )
             assemble_from_videos(
                 clips=timed_clips,
                 narration_path=audio_path,
@@ -274,17 +335,88 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
                 part_label=label,
                 sfx_overlays=sfx_overlays,
             )
-        elif video_type == "ai_video":
-            clips = generate_video_storyboard(
-                part=part,
-                stills_dir=config.AI_IMAGE_DIR / stem,
-                clips_dir=config.AI_VIDEO_DIR / stem,
-                duration=duration,
-                words=words,
-                style="comic",
-                character_lock=character_lock,
-                character_seed=character_seed,
+        elif video_type == "photos":
+            if visual_planner_enabled():
+                panels = build_planned_stock_photos(
+                    part,
+                    config.STILLS_DIR / stem,
+                    stem,
+                    duration,
+                    words=words,
+                    text=spoken,
+                )
+                _planner_visual_qa(part, spoken, duration, words, panels, provider="unsplash")
+            else:
+                panels = generate_photo_storyboard(
+                    part=part,
+                    out_dir=config.STILLS_DIR / stem,
+                    duration=duration,
+                    words=words,
+                    stem=stem,
+                )
+            if not panels:
+                raise RuntimeError(
+                    "No Unsplash photos found. Check UNSPLASH_ACCESS_KEY "
+                    "and broll_query for {0}".format(stem)
+                )
+            assemble_from_images(
+                panels=panels,
+                narration_path=audio_path,
+                caption_chunks=chunks,
+                out_path=out_path,
+                part_label=label,
+                sfx_overlays=sfx_overlays,
             )
+        elif video_type == "pixazo":
+            if visual_planner_enabled():
+                clips = build_planned_pixazo_storyboard(
+                    part=part,
+                    clips_dir=config.AI_VIDEO_DIR / stem,
+                    duration=duration,
+                    words=words,
+                    text=spoken,
+                )
+                _planner_visual_qa(part, spoken, duration, words, clips, provider="pixazo")
+            else:
+                clips = generate_pixazo_storyboard(
+                    part=part,
+                    clips_dir=config.AI_VIDEO_DIR / stem,
+                    duration=duration,
+                    words=words,
+                )
+            assemble_from_videos(
+                clips=clips,
+                narration_path=audio_path,
+                caption_chunks=chunks,
+                out_path=out_path,
+                part_label=label,
+                sfx_overlays=sfx_overlays,
+            )
+        elif video_type == "ai_video":
+            if visual_planner_enabled():
+                clips = build_planned_ai_video_storyboard(
+                    part=part,
+                    stills_dir=config.AI_IMAGE_DIR / stem,
+                    clips_dir=config.AI_VIDEO_DIR / stem,
+                    duration=duration,
+                    words=words,
+                    style="comic",
+                    character_lock=character_lock,
+                    character_seed=character_seed,
+                    text=spoken,
+                )
+                _planner_visual_qa(part, spoken, duration, words, clips, provider="ai_video")
+            else:
+                clips = generate_video_storyboard(
+                    part=part,
+                    stills_dir=config.AI_IMAGE_DIR / stem,
+                    clips_dir=config.AI_VIDEO_DIR / stem,
+                    duration=duration,
+                    words=words,
+                    style="comic",
+                    character_lock=character_lock,
+                    character_seed=character_seed,
+                )
             assemble_from_videos(
                 clips=clips,
                 narration_path=audio_path,
@@ -295,15 +427,30 @@ def run_pipeline(script_path: str, series_name: str = "series", overrides=None):
             )
         else:
             story_dir = config.AI_IMAGE_DIR / stem
-            panels = generate_storyboard(
-                part=part,
-                out_dir=story_dir,
-                duration=duration,
-                words=words,
-                style=video_type,
-                character_lock=character_lock,
-                character_seed=character_seed,
-            )
+            if visual_planner_enabled():
+                panels = build_planned_illustrated_storyboard(
+                    part=part,
+                    out_dir=story_dir,
+                    duration=duration,
+                    words=words,
+                    style=video_type,
+                    character_lock=character_lock,
+                    character_seed=character_seed,
+                    text=spoken,
+                )
+                _planner_visual_qa(
+                    part, spoken, duration, words, panels, provider=video_type,
+                )
+            else:
+                panels = generate_storyboard(
+                    part=part,
+                    out_dir=story_dir,
+                    duration=duration,
+                    words=words,
+                    style=video_type,
+                    character_lock=character_lock,
+                    character_seed=character_seed,
+                )
             assemble_from_images(
                 panels=panels,
                 narration_path=audio_path,

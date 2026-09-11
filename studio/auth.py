@@ -29,6 +29,9 @@ _ROUNDS = 200_000
 
 KEY_FIELDS = (
     "pexels",
+    "pixabay",
+    "unsplash",
+    "pixazo",
     "pollinations",
     "epidemic",
     "openai",
@@ -88,6 +91,9 @@ SECRET = _ensure_secret()
 # Paid / quota keys — never inherit process .env on a multi-user host.
 ACCOUNT_KEY_ENV = (
     "PEXELS_API_KEY",
+    "PIXABAY_API_KEY",
+    "UNSPLASH_ACCESS_KEY",
+    "PIXAZO_API_KEY",
     "POLLINATIONS_API_KEY",
     "EPIDEMIC_API_KEY",
     "OPENAI_API_KEY",
@@ -424,11 +430,48 @@ def get_keys(user_id: int) -> dict:
     return out
 
 
+# Settings field → process env / config attribute (for local .env fallback).
+KEY_ENV = {
+    "pexels": "PEXELS_API_KEY",
+    "pixabay": "PIXABAY_API_KEY",
+    "unsplash": "UNSPLASH_ACCESS_KEY",
+    "pixazo": "PIXAZO_API_KEY",
+    "pollinations": "POLLINATIONS_API_KEY",
+    "epidemic": "EPIDEMIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google_client_id": "GOOGLE_CLIENT_ID",
+    "google_client_secret": "GOOGLE_CLIENT_SECRET",
+}
+
+
+def _env_key_value(env_name: str) -> str:
+    if not env_name:
+        return ""
+    try:
+        import config as _config
+        raw = getattr(_config, env_name, None)
+        if raw is None:
+            raw = os.getenv(env_name, "")
+    except Exception:
+        raw = os.getenv(env_name, "")
+    return (raw or "").strip().strip('"').strip("'")
+
+
+def key_is_available(user_id: int, field: str) -> bool:
+    """True when this account has the key, or (local only) .env supplies it."""
+    value = (get_keys(user_id).get(field) or "").strip()
+    if value:
+        return True
+    if isolate_account_keys():
+        return False
+    return bool(_env_key_value(KEY_ENV.get(field) or ""))
+
+
 def keys_public(user_id: int) -> dict:
     keys = get_keys(user_id)
     public = {}
     for name in KEY_FIELDS:
-        value = keys.get(name) or ""
+        value = (keys.get(name) or "").strip()
         if name == "youtube":
             tokens = parse_youtube_tokens(value)
             channel = (tokens.get("channel") or "").strip()
@@ -439,7 +482,15 @@ def keys_public(user_id: int) -> dict:
                 "channel": channel,
             }
             continue
-        public[name] = {"set": bool(value), "hint": _hint(value) if value else ""}
+        if value:
+            public[name] = {"set": True, "hint": _hint(value)}
+            continue
+        # Local studio: treat .env keys as set so Settings / model list agree.
+        env_val = "" if isolate_account_keys() else _env_key_value(KEY_ENV.get(name) or "")
+        if env_val:
+            public[name] = {"set": True, "hint": "from .env"}
+        else:
+            public[name] = {"set": False, "hint": ""}
     return public
 
 
@@ -494,6 +545,9 @@ def apply_user_keys(user_id: int) -> dict:
     out = {}
     mapping = (
         ("PEXELS_API_KEY", "pexels"),
+        ("PIXABAY_API_KEY", "pixabay"),
+        ("UNSPLASH_ACCESS_KEY", "unsplash"),
+        ("PIXAZO_API_KEY", "pixazo"),
         ("POLLINATIONS_API_KEY", "pollinations"),
         ("EPIDEMIC_API_KEY", "epidemic"),
         ("OPENAI_API_KEY", "openai"),

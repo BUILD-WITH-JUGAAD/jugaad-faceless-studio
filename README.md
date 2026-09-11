@@ -1,6 +1,8 @@
 # JUGAAD Faceless Studio
 
-Write a prompt, pick a look, and render a captioned faceless video on your machine — narration, captions, b-roll or illustrated stills, and a music bed. No subscriptions, no watermarks, no usage caps you do not control.
+**A local app that turns a written story into a finished vertical short** — voiceover, captions, background visuals, and music — ready for YouTube Shorts, TikTok, or Reels. You never appear on camera. The heavy work (TTS, captions, editing) runs on your machine; optional free APIs supply stock or AI visuals when you want them.
+
+Write or expand a prompt, pick a look (live stock, Unsplash photos, comic/cartoon/anime stills, or free AI video), hit generate, and get an `.mp4` in `output/`. No subscriptions, no watermarks, no usage caps you do not control.
 
 **JUGAAD** (Hindi/Nepali): the art of turning limited resources into a clever solution.
 
@@ -9,7 +11,7 @@ Write a prompt, pick a look, and render a captioned faceless video on your machi
 ## What you get
 
 - **Studio** at [http://127.0.0.1:8787](http://127.0.0.1:8787) — story, title, setting, model, voice, music, ratio, and a library
-- **Video** — live Pexels stock or comic / cartoon / anime stills with camera motion
+- **Video** — Pexels / Pixabay stock, Unsplash photos, comic / cartoon / anime stills, or Pixazo AI clips
 - **Images** — still boards from a visual prompt (same illustrated models)
 - **Write with AI** — Ollama locally (free) or OpenAI from Settings
 - Local **Coqui TTS** + **Whisper** captions
@@ -27,6 +29,9 @@ The hosted beta keeps accounts and keys. Video generate still runs here (`python
 | Write with AI (Ollama) | Free, local | e.g. `gemma3:4b` |
 | Comic / cartoon / anime stills | Free | Pollinations, no key required |
 | Live b-roll (Pexels) | Free API key | [pexels.com/api](https://www.pexels.com/api/) |
+| Pixabay stock video | Free API key | [pixabay.com/api/docs](https://pixabay.com/api/docs/) |
+| Unsplash photos | Free Access Key | [unsplash.com/developers](https://unsplash.com/developers) |
+| Pixazo AI video (LTX) | Free fair-use key | [pixazo.ai/api/free](https://www.pixazo.ai/api/free) — no credit card |
 | OpenAI story expand | Optional paid key | Only if you skip Ollama |
 | Epidemic Sound import | Optional partner key | Music / SFX into `assets/background_music/` |
 | AI video (`ai_video`) | Paid Pollinations | Optional; not the default studio models |
@@ -56,7 +61,10 @@ Nothing in this list is a cloud account except the optional keys. Generate happe
 
 | Piece | Needed for | Skip it if… |
 |---|---|---|
-| **Pexels** free API key | **Live b-roll** | You only use 2D comic / cartoon / anime |
+| **Pexels** free API key | **Live b-roll** | You use Pixabay / Unsplash / illustrated / Pixazo |
+| **Pixabay** free API key | **Pixabay stock video** | You use Pexels or non-stock models |
+| **Unsplash** Access Key | **Unsplash photos** | You use video stock or illustrated |
+| **Pixazo** free API key | **Pixazo AI video** | You stick to stock or comic stills |
 | **Ollama** + a pulled model | **Write with AI** (free) | You write the story yourself, or use OpenAI |
 | **OpenAI** key | Write with AI without Ollama | Ollama is running, or you type the story |
 | **Pollinations** key | Busy free stills pool, or paid `ai_video` | Comic stills usually work without it |
@@ -100,6 +108,10 @@ Create a `.env` in this folder (never commit it):
 
 ```bash
 PEXELS_API_KEY=your_key_here
+# optional free stock / AI video
+# PIXABAY_API_KEY=
+# UNSPLASH_ACCESS_KEY=
+# PIXAZO_API_KEY=
 # optional
 # OPENAI_API_KEY=
 # OPENAI_MODEL=gpt-4o-mini
@@ -117,6 +129,7 @@ You can also paste the same keys in **Settings** after you sign in. Account keys
 
 - Comic / cartoon / anime: no keys. Install Python + ffmpeg + espeak-ng, then generate.
 - Live b-roll: add `PEXELS_API_KEY` (or paste it in Settings) **and restart studio** if you only put it in `.env`.
+- Pixabay / Unsplash / Pixazo: same idea — matching free key in `.env` or Settings.
 
 ### Optional: Write with AI (Ollama)
 
@@ -220,7 +233,10 @@ Same log in the terminal if you ran `python main.py …`.
 
 | Log / UI message | What is missing | Fix |
 |---|---|---|
-| `No PEXELS_API_KEY set` | Pexels key | Get a key at [pexels.com/api](https://www.pexels.com/api/). Put it in `.env` **or** Settings. Restart studio if you used `.env`. Or switch the model to comic / cartoon / anime. |
+| `No PEXELS_API_KEY set` | Pexels key | Get a key at [pexels.com/api](https://www.pexels.com/api/). Put it in `.env` **or** Settings. Restart studio if you used `.env`. Or switch the model. |
+| `No PIXABAY_API_KEY set` | Pixabay key | Free key at [pixabay.com/api/docs](https://pixabay.com/api/docs/). |
+| `No UNSPLASH_ACCESS_KEY set` | Unsplash Access Key | Free app at [unsplash.com/developers](https://unsplash.com/developers). |
+| `Pixazo AI video needs PIXAZO_API_KEY` | Pixazo key | Free signup at [pixazo.ai/api/free](https://www.pixazo.ai/api/free). |
 | `No Pexels clips found` | Key wrong, quota, or search too weird | Check the key in Settings. Soften visual keys (`empty street night rain`). Retry. |
 | `Ollama isn't running` | Ollama app / daemon | Start Ollama. `curl http://127.0.0.1:11434/api/tags`. Or type the story yourself. |
 | `Model gemma3:4b is not installed` | Pulled weights | `ollama pull gemma3:4b` (or set `OLLAMA_MODEL` to a model you already have). |
@@ -302,9 +318,12 @@ Drop royalty-free `.mp3` / `.wav` files in `assets/background_music/`. Default i
 | Studio / CLI | What you get |
 |---|---|
 | Live b-roll · `live` | Real Pexels clips, timed to the story |
+| Pixabay · `pixabay` | Free Pixabay stock video |
+| Unsplash · `photos` | HD stock photos + Ken Burns |
 | 2D comic · `comic` | Illustrated panels + camera motion |
 | Cartoon · `cartoon` | Flat cel-shaded stills |
 | Anime · `anime` | Clean line-art stills |
+| Pixazo AI · `pixazo` | Free LTX AI video (fair-use key) |
 | `ai_video` | Paid Pollinations motion (CLI) |
 
 Defaults live in `config.py` (`VIDEO_TYPE`, `IMAGE_MODEL`, `TTS_SPEAKER`). CLI wins.

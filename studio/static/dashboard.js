@@ -1,8 +1,15 @@
 async function api(url, options) {
   const res = await fetch(url, options);
   if (res.status === 401) {
-    window.location.href = "/login";
-    throw new Error("auth");
+    let detail = "";
+    try {
+      detail = String(((await res.clone().json()) || {}).detail || "");
+    } catch (_) {}
+    // Only studio session misses go to /login. YouTube 401s are feature errors.
+    if (/sign in first/i.test(detail)) {
+      window.location.href = "/login";
+      throw new Error("auth");
+    }
   }
   return res;
 }
@@ -189,6 +196,9 @@ document.addEventListener("keydown", (e) => {
   const keys = me.keys || {};
   const cards = [
     { id: "pexels", label: "Pexels", hint: "Live b-roll stock video", href: "https://www.pexels.com/api/" },
+    { id: "pixabay", label: "Pixabay", hint: "Free stock video", href: "https://pixabay.com/api/docs/" },
+    { id: "unsplash", label: "Unsplash", hint: "HD stock photos", href: "https://unsplash.com/developers" },
+    { id: "pixazo", label: "Pixazo", hint: "Free LTX AI video", href: "https://www.pixazo.ai/api/free" },
     { id: "pollinations", label: "Pollinations", hint: "Comic / cartoon / anime stills (optional paid video)", href: "https://enter.pollinations.ai/keys" },
     { id: "epidemic", label: "Epidemic Sound", hint: "Music and sound effects", href: "https://partner-content-api.epidemicsound.com" },
     { id: "openai", label: "OpenAI", hint: "Write the story from a short prompt", href: "https://platform.openai.com/api-keys" },

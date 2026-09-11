@@ -98,7 +98,7 @@ def exchange_code(code: str, client_id: str, secret: str, redirect: str) -> dict
 def refresh_tokens(tokens: dict, client_id: str, secret: str) -> dict:
     refresh = (tokens or {}).get("refresh_token") or ""
     if not refresh:
-        raise YouTubeError("YouTube is not connected. Open Settings and connect.", 401)
+        raise YouTubeError("YouTube is not connected. Open Settings and connect.", 400)
     expiry = float(tokens.get("expiry") or 0)
     if tokens.get("access_token") and expiry > time.time() + 60:
         return tokens
@@ -116,7 +116,7 @@ def refresh_tokens(tokens: dict, client_id: str, secret: str) -> dict:
     if resp.status_code >= 400 or not data.get("access_token"):
         raise YouTubeError(
             _google_message(data) or "YouTube login expired. Connect again in Settings.",
-            401,
+            400,
         )
     merged = dict(tokens)
     merged.update(_normalize_tokens(data))

@@ -3,9 +3,13 @@ Background visuals for a part.
 
 video_type:
   live / real / stock     — Pexels stock video (photoreal)
+  pixabay                 — Pixabay stock video (photoreal)
+  photos / unsplash       — Unsplash stock photos + Ken Burns
   comic / 2D comic        — generated graphic-novel stills, Ken-Burns pan
   cartoon / 2D / 2d       — generated 2D cartoon stills, Ken-Burns pan
   anime                   — generated anime stills, Ken-Burns pan
+  pixazo                  — free Pixazo LTX AI video
+  ai_video                — paid Pollinations video
 
 Illustrated styles use the free Pollinations image API (no key required).
 """
@@ -34,6 +38,8 @@ from moviepy.editor import CompositeVideoClip, ImageClip, concatenate_videoclips
 
 
 ILLUSTRATED_TYPES = {"comic", "cartoon", "anime"}
+PHOTO_TYPES = {"photos", "unsplash"}
+STOCK_VIDEO_TYPES = {"live", "pixabay"}
 
 _ALIASES = {
     "live": "live",
@@ -46,6 +52,13 @@ _ALIASES = {
     "realistic": "live",
     "broll": "live",
     "stock video": "live",
+    "pixabay": "pixabay",
+    "px": "pixabay",
+    "photos": "photos",
+    "photo": "photos",
+    "unsplash": "photos",
+    "stock photos": "photos",
+    "stock photo": "photos",
     "comic": "comic",
     "2d comic": "comic",
     "2d-comic": "comic",
@@ -56,6 +69,9 @@ _ALIASES = {
     "2d cartoon": "cartoon",
     "2d-cartoon": "cartoon",
     "anime": "anime",
+    "pixazo": "pixazo",
+    "ltx": "pixazo",
+    "free ai video": "pixazo",
     "ai video": "ai_video",
     "2d video": "ai_video",
     "2d-video": "ai_video",

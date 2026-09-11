@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/app.css?v=18" />
+  <link rel="stylesheet" href="/app.css?v=22" />
 </head>
 <body class="page">
   <div class="grain" aria-hidden="true"></div>
@@ -33,43 +33,66 @@
   <main class="settings">
     <p class="dialog-kicker">Settings</p>
     <h1>Your API keys</h1>
-    <p class="dialog-copy">Each account stores its own keys on this machine. Leave a field blank to keep the saved key. Keys are never shown in full.</p>
+    <p class="dialog-copy">Each account stores its own keys on this machine. Leave a field blank to keep the saved key. Keys are never shown in full. Click a field before pasting so the browser cannot overwrite it with a saved password.</p>
 
-    <form id="keysForm" class="keys-form">
+    <form id="keysForm" class="keys-form" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other">
+      <!-- Absorb Chrome password autofill so it never lands in the API key fields. -->
+      <div class="autofill-trap" aria-hidden="true">
+        <label>Username<input type="text" name="username" autocomplete="username" tabindex="-1" value="" /></label>
+        <label>Password<input type="password" name="password" autocomplete="current-password" tabindex="-1" value="" /></label>
+      </div>
       <label class="field deck">
         <span>Pexels <small id="pexelsHint"></small></span>
-        <input id="pexels" type="password" autocomplete="off" spellcheck="false" placeholder="Live b-roll — pexels.com/api" />
+        <input id="pexels" class="secret-key" type="text" name="jugaad_pexels_key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Live b-roll — pexels.com/api" />
         <a href="https://www.pexels.com/api/" target="_blank" rel="noopener noreferrer">Get a free Pexels key</a>
-        <button type="button" class="clear-key" data-key="pexels">Remove</button>
+        <button type="button" class="clear-key" data-key="pexels" hidden>Remove</button>
+      </label>
+      <label class="field deck">
+        <span>Pixabay <small id="pixabayHint"></small></span>
+        <input id="pixabay" class="secret-key" type="text" name="jugaad_pixabay_key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Stock video — pixabay.com/api/docs" />
+        <a href="https://pixabay.com/api/docs/" target="_blank" rel="noopener noreferrer">Get a free Pixabay key</a>
+        <button type="button" class="clear-key" data-key="pixabay" hidden>Remove</button>
+      </label>
+      <label class="field deck">
+        <span>Unsplash <small id="unsplashHint"></small></span>
+        <input id="unsplash" class="secret-key" type="text" name="jugaad_unsplash_key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="HD photos — Access Key" />
+        <a href="https://unsplash.com/developers" target="_blank" rel="noopener noreferrer">Get a free Unsplash Access Key</a>
+        <button type="button" class="clear-key" data-key="unsplash" hidden>Remove</button>
+      </label>
+      <label class="field deck">
+        <span>Pixazo <small id="pixazoHint"></small></span>
+        <input id="pixazo" class="secret-key" type="text" name="jugaad_pixazo_key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Free AI video (LTX) — no card" />
+        <a href="https://www.pixazo.ai/api/free" target="_blank" rel="noopener noreferrer">Get a free Pixazo key</a>
+        <button type="button" class="clear-key" data-key="pixazo" hidden>Remove</button>
       </label>
       <label class="field deck">
         <span>Pollinations <small id="pollinationsHint"></small></span>
-        <input id="pollinations" type="password" autocomplete="off" spellcheck="false" placeholder="Optional — comic stills / paid video" />
+        <input id="pollinations" class="secret-key" type="text" name="jugaad_pollinations_key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Optional — comic stills / paid video" />
         <a href="https://enter.pollinations.ai/keys" target="_blank" rel="noopener noreferrer">Get a Pollinations key</a>
-        <button type="button" class="clear-key" data-key="pollinations">Remove</button>
+        <button type="button" class="clear-key" data-key="pollinations" hidden>Remove</button>
       </label>
       <label class="field deck">
         <span>Epidemic Sound <small id="epidemicHint"></small></span>
-        <input id="epidemic" type="password" autocomplete="off" spellcheck="false" placeholder="Music &amp; SFX — Epidemic Partner API" />
+        <input id="epidemic" class="secret-key" type="text" name="jugaad_epidemic_key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Music &amp; SFX — Epidemic Partner API" />
         <a href="https://partner-content-api.epidemicsound.com" target="_blank" rel="noopener noreferrer">Epidemic Sound for developers</a>
-        <button type="button" class="clear-key" data-key="epidemic">Remove</button>
+        <button type="button" class="clear-key" data-key="epidemic" hidden>Remove</button>
       </label>
       <label class="field deck">
         <span>OpenAI <small id="openaiHint"></small></span>
-        <input id="openai" type="password" autocomplete="off" spellcheck="false" placeholder="Story expand — platform.openai.com" />
+        <input id="openai" class="secret-key" type="text" name="jugaad_openai_key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Story expand — platform.openai.com" />
         <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Get an OpenAI API key</a>
-        <button type="button" class="clear-key" data-key="openai">Remove</button>
+        <button type="button" class="clear-key" data-key="openai" hidden>Remove</button>
       </label>
       <label class="field deck">
         <span>Google client ID <small id="google_client_idHint"></small></span>
-        <input id="google_client_id" type="text" autocomplete="off" spellcheck="false" placeholder="YouTube upload — OAuth client ID" />
+        <input id="google_client_id" type="text" name="jugaad_google_client_id" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="YouTube upload — OAuth client ID" />
         <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Google Cloud credentials</a>
-        <button type="button" class="clear-key" data-key="google_client_id">Remove</button>
+        <button type="button" class="clear-key" data-key="google_client_id" hidden>Remove</button>
       </label>
       <label class="field deck">
         <span>Google client secret <small id="google_client_secretHint"></small></span>
-        <input id="google_client_secret" type="password" autocomplete="off" spellcheck="false" placeholder="OAuth client secret" />
-        <button type="button" class="clear-key" data-key="google_client_secret">Remove</button>
+        <input id="google_client_secret" class="secret-key" type="text" name="jugaad_google_client_secret" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="OAuth client secret" />
+        <button type="button" class="clear-key" data-key="google_client_secret" hidden>Remove</button>
       </label>
       <p class="auth-error" id="keysError" hidden></p>
       <button class="go auth-go" type="submit">Save keys</button>
@@ -92,6 +115,6 @@
       </div>
     </section>
   </main>
-  <script src="/settings.js?v=10"></script>
+  <script src="/settings.js?v=13"></script>
 </body>
 </html>

@@ -3,7 +3,9 @@ Central config for the faceless horror-reel pipeline.
 Everything here is free:
 - Coqui TTS: fully local, no key, no quota
 - Whisper: fully local, no key, no quota
-- Pexels: free API key, generous free quota (200 req/hr), no cost ever
+- Pexels / Pixabay / Unsplash: free API keys for stock
+- Pixazo: free fair-use AI video (LTX)
+- Pollinations: free illustrated stills (paid optional video)
 
 Get a free Pexels key at: https://www.pexels.com/api/  (takes 2 minutes)
 """
@@ -33,8 +35,11 @@ for d in [AUDIO_DIR, BROLL_DIR, STILLS_DIR, AI_IMAGE_DIR, AI_VIDEO_DIR, CAPTIONS
 
 # Visual pipeline. Scripts and CLI can override (model=live, model=comic, …).
 #   live / realistic_broll / pexels — real stock video from Pexels (assets/broll)
+#   pixabay                         — real stock video from Pixabay (assets/broll)
+#   photos / unsplash               — stock photos + Ken Burns (assets/stills)
 #   comic / 2d_comic                — illustrated stills + camera motion
 #   cartoon / anime                 — other illustrated stills
+#   pixazo                          — free Pixazo LTX AI video (optional key)
 #   ai_video                        — paid Pollinations video (optional)
 VIDEO_TYPE = "live"
 
@@ -47,8 +52,27 @@ IMAGE_MODEL = ""
 MUSIC_ENABLED = True
 MUSIC_TRACK = ""
 MUSIC_VOLUME = 0.12
-# Upper bound on Pexels clips for a live short. Actual count follows broll_queries.
+# Upper bound on legacy (VISUAL_PLANNER_ENABLED=False) stock clip/photo counts.
+# When the planner is on, beat count comes from visual_planner — this is unused.
 BROLL_CLIP_COUNT = 12
+
+# Visual intelligence planner (Phase 6 stock + Phase 7 illustrated/generative).
+# False → existing fetch_story_broll / generate_photo_storyboard / generate_storyboard /
+# generate_pixazo_storyboard / generate_video_storyboard paths unchanged.
+VISUAL_PLANNER_ENABLED = True
+# Phase 8: print VISUAL QA summary after planner-enabled visual builds (diagnostics only).
+VISUAL_QA_ENABLED = True
+# Preferred visual change interval (seconds). Planner targets this range.
+VISUAL_BEAT_MIN_SECONDS = 2.0
+VISUAL_BEAT_PREFERRED_SECONDS = 4.0
+VISUAL_BEAT_MAX_SECONDS = 6.0
+# Absolute max continuous hold before the planner force-splits a unit.
+VISUAL_BEAT_HARD_MAX_SECONDS = 8.0
+# Phase 5 ranking: normalized 0–1 relevance floor (best available still used if none pass).
+VISUAL_MIN_RELEVANCE_SCORE = float(os.getenv("VISUAL_MIN_RELEVANCE_SCORE", "0.60") or 0.60)
+# Penalties applied after semantic score (still allow reuse when it is the only viable pick).
+VISUAL_USED_ASSET_PENALTY = 0.15
+VISUAL_ADJACENT_ASSET_PENALTY = 0.35
 
 # Same integer across a series makes Pollinations keep a related look.
 # Scripts can also set CHARACTER_SEED / CHARACTER_LOCK.
@@ -107,6 +131,19 @@ POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
 AI_VIDEO_MODEL = "wan-fast"
 AI_VIDEO_SECONDS = 5
 
+# Pixazo free tier (Flux + LTX 2.3). Email signup, no card: https://www.pixazo.ai/api/free
+PIXAZO_API_KEY = os.getenv("PIXAZO_API_KEY", "")
+PIXAZO_GATEWAY = "https://gateway.pixazo.ai"
+# Free LTX base (async queue). Old /ltx/text-to-video path returns 404.
+PIXAZO_VIDEO_PATH = "/ltx-video/v1/text-to-video"
+PIXAZO_IMAGE_PATH = "/flux/text-to-image"
+# Free LTX is slow; hard cap on clips. Actual count also scales with duration
+# (~1 cut / 5s with shot plans). Override with PIXAZO_MAX_CLIPS=8 etc.
+PIXAZO_MAX_CLIPS = int(os.getenv("PIXAZO_MAX_CLIPS", "12") or 12)
+# LTX clip length (frames / fps). Free default ~2s; raise only if your tier allows.
+PIXAZO_NUM_FRAMES = int(os.getenv("PIXAZO_NUM_FRAMES", "49") or 49)
+PIXAZO_FRAME_RATE = int(os.getenv("PIXAZO_FRAME_RATE", "24") or 24)
+
 # ---- TTS settings ----
 # Coqui TTS model — this one is a good, moody, low-cost-to-run English voice.
 # Full model list: https://github.com/coqui-ai/TTS#model-list
@@ -140,6 +177,10 @@ OLLAMA_HOST = (os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL") or "gemma3:4b"
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")  # put your free key in a .env file
 PEXELS_ORIENTATION = "portrait"  # unused for search; we crop landscape stock to 9:16
+# Free stock video: https://pixabay.com/api/docs/
+PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "")
+# Free HD photos: https://unsplash.com/developers (Access Key)
+UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "")
 
 # ---- Epidemic Sound Partner API (music + SFX into assets/background_music) ----
 # Key from the developer portal. Never expose it to the browser.

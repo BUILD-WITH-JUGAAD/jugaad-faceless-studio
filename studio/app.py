@@ -54,10 +54,13 @@ from youtube_engine import update_video as youtube_update
 from youtube_engine import upload_video as youtube_upload
 from story_engine import (
     StoryError,
+    clean_story,
     derive_visuals,
     effective_setting,
     effective_title,
+    filter_stock_visuals,
     generate_story,
+    normalize_shots,
     ollama_status,
     parse_visuals,
     visual_to_image_beat,
@@ -122,6 +125,69 @@ def _account_key_on(user_value: str, env_value: str) -> bool:
     if auth.isolate_account_keys():
         return False
     return bool((env_value or "").strip())
+
+
+# Video models. Free illustrated styles need no key. Stock / Pixazo only
+# appear when that account (or local .env) has the matching API key.
+_VIDEO_MODELS = (
+    {
+        "id": "live",
+        "label": "Live b-roll",
+        "hint": "Real Pexels stock, timed to the story",
+        "key_field": "pexels",
+    },
+    {
+        "id": "pixabay",
+        "label": "Pixabay",
+        "hint": "Free stock video from Pixabay",
+        "key_field": "pixabay",
+    },
+    {
+        "id": "photos",
+        "label": "Unsplash",
+        "hint": "HD stock photos + camera motion",
+        "key_field": "unsplash",
+    },
+    {
+        "id": "comic",
+        "label": "2D comic",
+        "hint": "Illustrated panels + camera motion",
+        "key_field": None,
+    },
+    {
+        "id": "cartoon",
+        "label": "Cartoon",
+        "hint": "Flat cel-shaded stills",
+        "key_field": None,
+    },
+    {
+        "id": "anime",
+        "label": "Anime",
+        "hint": "Clean line art stills",
+        "key_field": None,
+    },
+    {
+        "id": "pixazo",
+        "label": "Pixazo AI",
+        "hint": "Free LTX AI video (fair-use key)",
+        "key_field": "pixazo",
+    },
+)
+
+
+def _video_models_for(user_id: int) -> list:
+    """Free models always; key-gated models only when the key is set."""
+    out = []
+    for row in _VIDEO_MODELS:
+        need = row.get("key_field")
+        if need and not auth.key_is_available(user_id, need):
+            continue
+        out.append({
+            "id": row["id"],
+            "label": row["label"],
+            "hint": row["hint"],
+        })
+    return out
 
 
 @app.middleware("http")
@@ -318,7 +384,7 @@ def _visual_list(raw) -> list:
         text = "\n".join(str(x) for x in raw)
     else:
         text = str(raw or "")
-    return parse_visuals(text)[:16]
+    return filter_stock_visuals(parse_visuals(text))
 
 
 class GenerateBody(BaseModel):
@@ -329,6 +395,8 @@ class GenerateBody(BaseModel):
     title: str = ""
     setting: str = ""
     visuals: Union[str, List[str]] = ""
+    shots: List[dict] = []
+    characters: List[dict] = []
     voice: str = ""
     ref: str = ""
     ref_role: str = "creature"
@@ -464,15 +532,16 @@ def _options(user_id: int, base_url: str = "") -> dict:
         })
     library = _library_items(user_id)
     keys = auth.get_keys(user_id)
+    models = _video_models_for(user_id)
     return {
         "brand": "JUGAAD",
         "tagline": "Faceless studio",
-        "models": [
-            {"id": "live", "label": "Live b-roll", "hint": "Real Pexels stock, timed to the story"},
-            {"id": "comic", "label": "2D comic", "hint": "Illustrated panels + camera motion"},
-            {"id": "cartoon", "label": "Cartoon", "hint": "Flat cel-shaded stills"},
-            {"id": "anime", "label": "Anime", "hint": "Clean line art stills"},
-        ],
+        "models": models,
+        "models_hint": (
+            ""
+            if models
+            else "Add a Pexels, Pixabay, Unsplash, or Pixazo key in Settings for stock / AI video."
+        ),
         "voices": [
             {
                 "id": voice["id"],
@@ -499,16 +568,10 @@ def _options(user_id: int, base_url: str = "") -> dict:
         "library": library[:24],
         "busy": _current is not None,
         "epidemic": {
-            "enabled": _account_key_on(
-                keys.get("epidemic"),
-                getattr(config, "EPIDEMIC_API_KEY", ""),
-            )
+            "enabled": auth.key_is_available(user_id, "epidemic"),
         },
         "openai": {
-            "enabled": _account_key_on(
-                keys.get("openai"),
-                getattr(config, "OPENAI_API_KEY", ""),
-            )
+            "enabled": auth.key_is_available(user_id, "openai"),
         },
         "youtube": _youtube_public(keys, base_url),
         "story": _story_options(user_id, keys),
@@ -635,30 +698,29 @@ async def api_settings_put(request: Request):
     return {"keys": auth.save_keys(user["id"], updates)}
 
 
-def _story_options(_user_id: int, keys: dict) -> dict:
+def _story_options(user_id: int, keys: dict) -> dict:
     ollama = ollama_status()
-    openai_on = _account_key_on(
-        keys.get("openai"),
-        getattr(config, "OPENAI_API_KEY", ""),
-    )
+    openai_on = auth.key_is_available(user_id, "openai")
+    providers = [
+        {
+            "id": "ollama",
+            "label": "Ollama",
+            "hint": "FREE LOCAL" if ollama.get("online") else "offline",
+            "online": bool(ollama.get("online")),
+            "model": ollama.get("model") or "gemma3:4b",
+            "model_ready": bool(ollama.get("model_ready")),
+        },
+    ]
+    if openai_on:
+        providers.append({
+            "id": "openai",
+            "label": "OpenAI",
+            "hint": "API",
+            "online": True,
+        })
     return {
         "default": "ollama",
-        "providers": [
-            {
-                "id": "ollama",
-                "label": "Ollama",
-                "hint": "FREE LOCAL" if ollama.get("online") else "offline",
-                "online": bool(ollama.get("online")),
-                "model": ollama.get("model") or "gemma3:4b",
-                "model_ready": bool(ollama.get("model_ready")),
-            },
-            {
-                "id": "openai",
-                "label": "OpenAI",
-                "hint": "API",
-                "online": openai_on,
-            },
-        ],
+        "providers": providers,
     }
 
 
@@ -695,6 +757,10 @@ def api_story_expand(request: Request, body: StoryExpandBody):
         "title": pack.get("title") or "",
         "setting": pack.get("setting") or "",
         "visuals": pack.get("visuals") or [],
+        "setting_search_keys": pack.get("setting_search_keys") or [],
+        "characters": pack.get("characters") or [],
+        "shots": pack.get("shots") or [],
+        "setting_detail": pack.get("setting_detail") or {},
         "provider": provider,
     }
 
@@ -721,7 +787,12 @@ def api_options(request: Request):
 
 
 def _youtube_http(exc: YouTubeError):
-    raise HTTPException(status_code=exc.status, detail=str(exc))
+    # Never surface YouTube/Google auth failures as 401 — the frontend treats
+    # 401 "Sign in first" as a studio session miss and redirects to /login.
+    status = int(exc.status or 400)
+    if status == 401:
+        status = 400
+    raise HTTPException(status_code=status, detail=str(exc))
 
 
 def _youtube_map_path(user_id: int) -> Path:
@@ -773,7 +844,7 @@ def _youtube_creds(user: dict):
         config.GOOGLE_CLIENT_SECRET = extra["GOOGLE_CLIENT_SECRET"]
     tokens = auth.youtube_tokens(user["id"])
     if not tokens.get("refresh_token"):
-        raise HTTPException(401, "Connect YouTube in Settings first.")
+        raise HTTPException(400, "Connect YouTube in Settings first.")
     keys = auth.get_keys(user["id"])
     client_id, secret = youtube_client(keys)
     if not client_id or not secret:
@@ -950,9 +1021,16 @@ def api_generate(request: Request, body: GenerateBody):
             503,
             "This beta host saves accounts and keys. Generate still runs on your machine with `python studio.py`.",
         )
-    prompt = (body.prompt or "").strip()
+    prompt = clean_story(body.prompt or "") or (body.prompt or "").strip()
     if len(prompt.split()) < 8:
         raise HTTPException(400, "Write a fuller story — at least a few sentences.")
+    allowed = {m["id"] for m in _video_models_for(user["id"])}
+    model = (body.model or "").strip().lower()
+    if model not in allowed:
+        raise HTTPException(
+            400,
+            "That model needs an API key. Pick one from the list, or add the key in Settings.",
+        )
     try:
         config.apply_aspect_ratio(body.size)
     except ValueError as exc:
@@ -969,13 +1047,18 @@ def api_generate(request: Request, body: GenerateBody):
         title = effective_title(prompt, body.title)
         setting = effective_setting(prompt, body.setting)
         visuals = _visual_list(body.visuals) or derive_visuals(prompt, setting)
+        shots = normalize_shots(body.shots or [])
+        characters = [
+            c for c in (body.characters or [])
+            if isinstance(c, dict) and any(str(c.get(k) or "").strip() for k in ("name", "appearance", "clothing", "description"))
+        ]
         stem = _slug(title, "jugaad_{0}".format(job_id))
         job = {
             "id": job_id,
             "user_id": user["id"],
             "status": "queued",
             "prompt": prompt,
-            "model": body.model,
+            "model": model,
             "music": body.music or "random",
             "voice": resolve_voice(body.voice),
             "ref": (body.ref or "").strip(),
@@ -987,6 +1070,8 @@ def api_generate(request: Request, body: GenerateBody):
             "title": title,
             "setting": setting,
             "visuals": visuals,
+            "shots": shots,
+            "characters": characters,
             "stem": stem,
             "created": datetime.now().isoformat(timespec="seconds"),
             "log": "",
@@ -1026,8 +1111,7 @@ def api_images_generate(request: Request, body: ImageBody):
         job_id = uuid.uuid4().hex[:8]
         title = effective_title(prompt, body.title)
         setting = effective_setting(prompt, body.setting)
-        visuals = _visual_list(body.visuals)
-        stem = _slug(title, "board_{0}".format(job_id))
+        visuals = _visual_list(body.visuals) or derive_visuals(prompt, setting)
         folder = config.AI_IMAGE_DIR / stem
         video = config.OUTPUT_DIR / (stem + ".mp4")
         if folder.exists() or video.exists():
@@ -1140,15 +1224,24 @@ def _run_image_job(job_id: str) -> None:
 def _write_script(job: dict) -> Path:
     setting = job.get("setting") or "dark cinematic night village"
     visuals = [v for v in (job.get("visuals") or []) if str(v).strip()]
+    shots = normalize_shots(job.get("shots") or [])
+    characters = [
+        c for c in (job.get("characters") or [])
+        if isinstance(c, dict)
+    ]
     extra = ""
     if visuals:
-        extra = (
+        extra += (
             '    "image_prompts": {0},\n'
             '    "broll_queries": {1},\n'
         ).format(
             repr([visual_to_image_beat(v) for v in visuals]),
             repr(visuals),
         )
+    if shots:
+        extra += '    "shots": {0},\n'.format(repr(shots))
+    if characters:
+        extra += '    "characters": {0},\n'.format(repr(characters))
     path = SCRIPTS / "{0}.py".format(job["stem"])
     path.write_text(
         "VIDEO_TYPE = {0}\n"

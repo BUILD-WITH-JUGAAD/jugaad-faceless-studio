@@ -64,6 +64,11 @@
             <textarea id="visuals" class="visuals" rows="6" placeholder="One search phrase per line — Write with AI fills these, or paste from ChatGPT.&#10;Tokyo Japan empty street night rain&#10;Japanese schoolgirl walking alone at night"></textarea>
             <p class="length-note">Drives anime, comic, cartoon stills and Pexels clips. Scene titles like “1. Opening” are ignored.</p>
           </label>
+          <div class="field" id="shotPlanField" hidden>
+            <span>Shot Plan</span>
+            <div id="shotPlan" class="shot-plan"></div>
+            <p class="length-note">Each shot is one short action for Pixazo (~5s). Clips are generated separately, then stitched into one continuous video.</p>
+          </div>
         </div>
 
         <fieldset class="field deck">
@@ -373,6 +378,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
-  <script src="/app.js?v=21"></script>
+  <script src="/app.js?v=25"></script>
 </body>
 </html>

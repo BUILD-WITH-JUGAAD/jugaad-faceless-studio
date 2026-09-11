@@ -1,12 +1,12 @@
 """
-Pexels stock video, ranked against the spoken story.
+Stock video b-roll (Pexels or Pixabay), ranked against the spoken story.
 
 The old path searched portrait-only and took the first hit, so
 'zanzibar aerial' became a kayak vlog. This version:
 
   1. Builds short stock queries from each narration beat
   2. Searches without an orientation filter (we crop to 9:16 later)
-  3. Scores every candidate by how well its Pexels slug matches the beat
+  3. Scores every candidate by how well its slug/tags match the beat
   4. Drops clips whose slugs are tourism, gym, subway, Tokyo, etc.
 """
 
@@ -21,7 +21,8 @@ import requests
 import config
 
 PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
-ALGO_VERSION = 3
+PIXABAY_SEARCH_URL = "https://pixabay.com/api/videos/"
+ALGO_VERSION = 4
 
 _STOP = {
     "a", "an", "the", "of", "to", "in", "on", "at", "for", "and", "or", "with",
@@ -49,7 +50,7 @@ _REJECT = (
     "night-drive", "dashboard", "car-interior", "curvy-road",
 )
 
-# Map spoken story moments to queries Pexels actually has, plus tokens we
+# Map spoken story moments to queries stock libraries actually have, plus tokens we
 # require/boost in the result slug. Never search for the monster's name.
 _BEAT_RULES = (
     (r"zanzibar|pemba|unguja|tanzania",
@@ -121,18 +122,46 @@ def _tokens(text: str) -> set:
     return {w for w in words if len(w) > 2 and w not in _STOP}
 
 
+def _normalize_provider(provider: str) -> str:
+    raw = (provider or "pexels").strip().lower()
+    if raw in {"pixabay", "px"}:
+        return "pixabay"
+    return "pexels"
+
+
 def _slug(video: dict) -> str:
+    tags = (video.get("tags") or "").strip()
+    if tags:
+        return re.sub(r"[^a-z0-9]+", "-", tags.lower()).strip("-")
     url = video.get("url") or ""
-    return url.split("/video/")[-1].rstrip("/")
+    if "/video/" in url:
+        return url.split("/video/")[-1].rstrip("/")
+    return url.rstrip("/").split("/")[-1]
 
 
-def _headers() -> dict:
+def _hay_tokens(video: dict) -> set:
+    slug = _slug(video).replace("-", " ")
+    tags = (video.get("tags") or "").replace(",", " ")
+    return _tokens("{0} {1}".format(slug, tags))
+
+
+def _headers_pexels() -> dict:
     if not config.PEXELS_API_KEY:
         raise RuntimeError(
             "No PEXELS_API_KEY set. Get a free key at https://www.pexels.com/api/ "
             "and add it to a .env file as PEXELS_API_KEY=your_key_here"
         )
     return {"Authorization": config.PEXELS_API_KEY}
+
+
+def _require_pixabay() -> str:
+    key = (getattr(config, "PIXABAY_API_KEY", "") or "").strip()
+    if not key:
+        raise RuntimeError(
+            "No PIXABAY_API_KEY set. Get a free key at https://pixabay.com/api/docs/ "
+            "and add it to .env as PIXABAY_API_KEY=your_key_here"
+        )
+    return key
 
 
 def queries_for_beat(beat: str, setting: str = "") -> tuple:
@@ -175,11 +204,11 @@ def _rejected(slug: str, allow: set = None) -> str:
 
 def score_video(video: dict, query: str, need: set, setting: str) -> float:
     slug = _slug(video)
-    hay = _tokens(slug.replace("-", " "))
+    hay = _hay_tokens(video)
     if not hay:
         return -50.0
     allow = _tokens(query) | set(need or ()) | _tokens(setting)
-    banned = _rejected(slug, allow)
+    banned = _rejected(slug, allow) or _rejected(" ".join(sorted(hay)), allow)
     if banned:
         return -100.0
 
@@ -207,11 +236,50 @@ def score_video(video: dict, query: str, need: set, setting: str) -> float:
     return score
 
 
-def _search(query: str, per_page: int = 30) -> list:
+def _normalize_pixabay(hit: dict) -> dict:
+    files = []
+    for quality in ("large", "medium", "small", "tiny"):
+        row = (hit.get("videos") or {}).get(quality) or {}
+        if row.get("url"):
+            files.append({
+                "link": row["url"],
+                "width": int(row.get("width") or 0),
+                "height": int(row.get("height") or 0),
+            })
+    return {
+        "id": hit.get("id"),
+        "duration": hit.get("duration"),
+        "url": hit.get("pageURL") or "",
+        "tags": hit.get("tags") or "",
+        "video_files": files,
+    }
+
+
+def _search_pexels(query: str, per_page: int = 30) -> list:
     params = {"query": query, "per_page": per_page}
-    resp = requests.get(PEXELS_SEARCH_URL, headers=_headers(), params=params, timeout=20)
+    resp = requests.get(
+        PEXELS_SEARCH_URL, headers=_headers_pexels(), params=params, timeout=20,
+    )
     resp.raise_for_status()
     return resp.json().get("videos") or []
+
+
+def _search_pixabay(query: str, per_page: int = 30) -> list:
+    params = {
+        "key": _require_pixabay(),
+        "q": query,
+        "per_page": max(3, min(int(per_page), 200)),
+        "safesearch": "true",
+    }
+    resp = requests.get(PIXABAY_SEARCH_URL, params=params, timeout=20)
+    resp.raise_for_status()
+    return [_normalize_pixabay(hit) for hit in (resp.json().get("hits") or [])]
+
+
+def _search(query: str, provider: str = "pexels", per_page: int = 30) -> list:
+    if _normalize_provider(provider) == "pixabay":
+        return _search_pixabay(query, per_page=per_page)
+    return _search_pexels(query, per_page=per_page)
 
 
 def _pick_file(video: dict):
@@ -230,14 +298,15 @@ def _pick_file(video: dict):
     return ranked[0][2] if ranked else files[0]
 
 
-def choose_clip(queries, need, setting, used_ids) -> dict:
+def choose_clip(queries, need, setting, used_ids, provider: str = "pexels") -> dict:
     """Search every query, score all unique videos, return the best."""
+    provider = _normalize_provider(provider)
     candidates = {}
     for query in queries:
         try:
-            videos = _search(query)
+            videos = _search(query, provider=provider)
         except Exception as exc:
-            print(f"[broll] search failed '{query}': {exc}")
+            print("[broll] search failed '{0}': {1}".format(query, exc))
             continue
         for video in videos:
             vid = video.get("id")
@@ -254,6 +323,7 @@ def choose_clip(queries, need, setting, used_ids) -> dict:
                 "slug": _slug(video),
                 "duration": video.get("duration"),
                 "file": file_info,
+                "provider": provider,
             }
             prev = candidates.get(vid)
             if prev is None or sc > prev["score"]:
@@ -278,6 +348,17 @@ def _download(file_info, out_path: Path) -> Path:
 
 def _visual_keys(part: dict) -> list:
     keys = part.get("broll_queries") or part.get("image_prompts") or []
+    try:
+        from story_engine import filter_stock_visuals
+        filtered = filter_stock_visuals(keys)
+        # Illustrated image_prompts can be longer beats; keep them if stock filter emptied
+        # only when they came from image_prompts and look like scene phrases.
+        if filtered:
+            return filtered
+        if part.get("broll_queries"):
+            return []
+    except Exception:
+        pass
     return [str(k).strip() for k in keys if str(k).strip()]
 
 
@@ -290,11 +371,23 @@ def _beat_list(part: dict, duration: float) -> list:
     return beats or [text[:180]]
 
 
-def fetch_story_broll(part: dict, dest_dir: Path, stem: str, duration: float) -> list:
+def fetch_story_broll(
+    part: dict,
+    dest_dir: Path,
+    stem: str,
+    duration: float,
+    provider: str = "pexels",
+) -> list:
     """
-    One scored Pexels clip per spoken beat. Reuses files only when the
-    algorithm version and beat list still match.
+    One scored stock clip per spoken beat. Reuses files only when the
+    algorithm version, provider, and beat list still match.
     """
+    provider = _normalize_provider(provider)
+    if provider == "pixabay":
+        _require_pixabay()
+    else:
+        _headers_pexels()
+
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     setting = (part.get("broll_query") or "").strip()
@@ -311,17 +404,22 @@ def fetch_story_broll(part: dict, dest_dir: Path, stem: str, duration: float) ->
                 need |= _tokens(extra)
         plan.append({"beat": beat, "queries": queries[:6], "need": sorted(need)})
 
-    manifest_path = dest_dir / f"{stem}_broll.json"
-    existing = sorted(dest_dir.glob(f"{stem}_broll_*.mp4"))
+    manifest_path = dest_dir / "{0}_broll.json".format(stem)
+    existing = sorted(dest_dir.glob("{0}_broll_*.mp4".format(stem)))
     if existing and manifest_path.exists():
         try:
             saved = json.loads(manifest_path.read_text())
             if (
                 saved.get("algo") == ALGO_VERSION
+                and saved.get("provider") == provider
                 and saved.get("beats") == [p["beat"] for p in plan]
                 and len(existing) >= len(plan)
             ):
-                print(f"[broll] reusing {len(plan)} scored clip(s) for {stem}")
+                print(
+                    "[broll] reusing {0} scored clip(s) for {1} ({2})".format(
+                        len(plan), stem, provider,
+                    )
+                )
                 return existing[: len(plan)]
         except Exception:
             pass
@@ -336,11 +434,14 @@ def fetch_story_broll(part: dict, dest_dir: Path, stem: str, duration: float) ->
     clips = []
     records = []
     last = None
+    id_key = "pixabay_id" if provider == "pixabay" else "pexels_id"
     for i, item in enumerate(plan, start=1):
-        dest = dest_dir / f"{stem}_broll_{i}.mp4"
-        picked = choose_clip(item["queries"], set(item["need"]), setting, used)
+        dest = dest_dir / "{0}_broll_{1}.mp4".format(stem, i)
+        picked = choose_clip(
+            item["queries"], set(item["need"]), setting, used, provider=provider,
+        )
         if picked is None:
-            print(f"[broll] beat {i} no scored match ({item['beat'][:60]!r})")
+            print("[broll] beat {0} no scored match ({1!r})".format(i, item["beat"][:60]))
             if last is not None:
                 clips.append(last)
                 records.append({"beat": item["beat"], "reused_previous": True})
@@ -355,15 +456,19 @@ def fetch_story_broll(part: dict, dest_dir: Path, stem: str, duration: float) ->
             "query": picked["query"],
             "slug": picked["slug"],
             "score": round(picked["score"], 2),
-            "pexels_id": picked["id"],
+            "provider": provider,
+            id_key: picked["id"],
         })
         print(
-            f"[broll] beat {i}/{len(plan)} score={picked['score']:.1f} "
-            f"q={picked['query']!r} -> {picked['slug'][:70]}"
+            "[broll] beat {0}/{1} [{2}] score={3:.1f} q={4!r} -> {5}".format(
+                i, len(plan), provider, picked["score"], picked["query"],
+                picked["slug"][:70],
+            )
         )
 
     manifest_path.write_text(json.dumps({
         "algo": ALGO_VERSION,
+        "provider": provider,
         "setting": setting,
         "beats": [p["beat"] for p in plan],
         "clips": records,
@@ -376,11 +481,15 @@ def fetch_broll(query: str, out_path: Path, min_duration: int = 8, used_ids=None
     used_ids = used_ids if used_ids is not None else set()
     picked = choose_clip([query], _tokens(query), query, used_ids)
     if picked is None:
-        print(f"[broll] no suitable clip found for '{query}'")
+        print("[broll] no suitable clip found for '{0}'".format(query))
         return None
     used_ids.add(picked["id"])
     path = _download(picked["file"], out_path)
-    print(f"[broll] downloaded '{query}' -> {Path(path).name} ({picked['slug'][:60]})")
+    print(
+        "[broll] downloaded '{0}' -> {1} ({2})".format(
+            query, Path(path).name, picked["slug"][:60],
+        )
+    )
     return path
 
 

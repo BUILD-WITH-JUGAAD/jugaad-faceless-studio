@@ -9,7 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from story_engine import (  # noqa: E402
+    _finish_story,
     _parse_pack,
+    clean_story,
+    derive_visuals,
+    filter_stock_visuals,
     parse_visuals,
     visual_to_image_beat,
 )
@@ -124,6 +128,52 @@ class VisualParseTests(unittest.TestCase):
                 "Teke Teke crawling ghost",
             ],
         )
+
+    def test_rejects_chat_preamble_as_visual_key(self):
+        preamble = (
+            "Here's a short, unnerving story designed for a YouTube Short, "
+            "aiming for a 'dread' effect:"
+        )
+        self.assertEqual(parse_visuals(preamble), [])
+        self.assertEqual(filter_stock_visuals([preamble]), [])
+
+    def test_finish_story_strips_preamble_and_derives_keys(self):
+        raw = (
+            "Here's a short, unnerving story designed for a YouTube Short, "
+            "aiming for a 'dread' effect:\n"
+            "The rain started subtly. Just a whisper against the windows. "
+            "Then it intensified against the cellar door.\n"
+            "TITLE: The Unopened Box\n"
+            "SETTING: Dark cellar rainstorm night\n"
+        )
+        pack = _finish_story(raw)
+        self.assertNotIn("Here's a short", pack["text"])
+        self.assertTrue(pack["text"].startswith("The rain started"))
+        self.assertEqual(pack["title"], "The Unopened Box")
+        self.assertTrue(len(pack["visuals"]) >= 1)
+        for key in pack["visuals"]:
+            self.assertNotIn("Here's a short", key)
+            self.assertFalse(key.rstrip().endswith(":"))
+
+    def test_clean_story_drops_designed_for_preamble(self):
+        text = clean_story(
+            "Here's a short, unnerving story designed for a YouTube Short:\n"
+            "The box sat unopened in the dark cellar."
+        )
+        self.assertNotIn("Here's a short", text)
+        self.assertIn("box sat unopened", text)
+
+    def test_derive_visuals_ignores_preamble_only(self):
+        keys = derive_visuals(
+            "Here's a short, unnerving story designed for a YouTube Short, "
+            "aiming for a dread effect:\n"
+            "Rain drummed on the cellar windows. An unopened box waited in the dark.",
+            "Dark cellar rainstorm night",
+        )
+        self.assertTrue(keys)
+        joined = " ".join(keys).lower()
+        self.assertNotIn("here's a short", joined)
+        self.assertTrue("cellar" in joined or "rain" in joined or "box" in joined)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,8 @@ const state = {
   refUrl: "",
   refRole: "creature",
   boardStem: "",
+  shots: [],
+  characters: [],
 };
 
 const REF_ROLES = [
@@ -45,8 +47,16 @@ const $ = (id) => document.getElementById(id);
 async function api(url, options) {
   const res = await fetch(url, options);
   if (res.status === 401) {
-    window.location.href = "/login";
-    throw new Error("auth");
+    let detail = "";
+    try {
+      detail = String(((await res.clone().json()) || {}).detail || "");
+    } catch (_) {}
+    // Only studio session misses go to /login. Feature 401s (YouTube not
+    // connected / token expired) must not bounce the whole app.
+    if (/sign in first/i.test(detail)) {
+      window.location.href = "/login";
+      throw new Error("auth");
+    }
   }
   return res;
 }
@@ -260,19 +270,32 @@ function onSecondsInput() {
 function renderOptions(data) {
   const models = $("models");
   models.innerHTML = "";
-  data.models.forEach((m) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "card" + (m.id === state.model ? " is-on" : "");
-    b.innerHTML = `<strong>${m.label}</strong><span>${m.hint}</span>`;
-    b.addEventListener("click", () => {
-      state.model = m.id;
-      models.querySelectorAll(".card").forEach((n) => n.classList.remove("is-on"));
-      b.classList.add("is-on");
-      syncRefUI();
+  const list = data.models || [];
+  if (!list.length) {
+    const note = document.createElement("p");
+    note.className = "length-note";
+    note.textContent = data.models_hint
+      || "Add a Pexels, Pixabay, Unsplash, or Pixazo key in Settings to unlock video models.";
+    models.appendChild(note);
+    state.model = "";
+  } else {
+    if (!list.some((m) => m.id === state.model)) {
+      state.model = list[0].id;
+    }
+    list.forEach((m) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "card" + (m.id === state.model ? " is-on" : "");
+      b.innerHTML = `<strong>${m.label}</strong><span>${m.hint}</span>`;
+      b.addEventListener("click", () => {
+        state.model = m.id;
+        models.querySelectorAll(".card").forEach((n) => n.classList.remove("is-on"));
+        b.classList.add("is-on");
+        syncRefUI();
+      });
+      models.appendChild(b);
     });
-    models.appendChild(b);
-  });
+  }
 
   const voices = $("voices");
   if (voices) {
@@ -492,15 +515,17 @@ function renderStoryEngines(data) {
   const story = (data && data.story) || {};
   const providers = story.providers || [
     { id: "ollama", label: "Ollama", hint: "FREE LOCAL", online: false },
-    { id: "openai", label: "OpenAI", hint: "API", online: false },
   ];
   if (!providers.some((p) => p.id === state.storyEngine)) {
-    state.storyEngine = "ollama";
+    state.storyEngine = (providers[0] && providers[0].id) || "ollama";
   }
   const ollama = providers.find((p) => p.id === "ollama") || {};
+  const hasOpenAI = providers.some((p) => p.id === "openai");
   const note = ollama.online
     ? (ollama.model_ready ? "" : (ollama.model ? "Model " + ollama.model + " is not installed. Run: ollama pull " + ollama.model : ""))
-    : "Ollama is offline. Start it on this Mac, or pick OpenAI — API.";
+    : (hasOpenAI
+      ? "Ollama is offline. Start it on this Mac, or pick OpenAI — API."
+      : "Ollama is offline. Start it on this Mac, or add an OpenAI key in Settings.");
   ["storyEngines", "imageStoryEngines"].forEach((id) => {
     const wrap = $(id);
     if (!wrap) return;
@@ -1170,8 +1195,8 @@ function syncRefUI() {
   });
   const note = $("videoRefNote");
   if (note) {
-    if (state.model === "live") {
-      note.textContent = "Live Pexels ignores the photo. Pick comic, cartoon, or anime.";
+    if (state.model === "live" || state.model === "pixabay" || state.model === "photos") {
+      note.textContent = "Stock models ignore the reference photo.";
     } else if (state.refRole === "character") {
       note.textContent = "Every human face will match this photo.";
     } else if (state.refRole === "style") {
@@ -1214,7 +1239,6 @@ async function loadOptions() {
   renderImageOptions(data);
   renderStoryEngines(data);
   syncActiveFrame();
-  const keys = data.keys || {};
   const gen = data.generate || {};
   if (gen.enabled === false) {
     $("generate").disabled = true;
@@ -1224,11 +1248,12 @@ async function loadOptions() {
       const fine = document.querySelector(".fine");
       if (fine) fine.textContent = gen.hint;
     }
+  } else if (!(data.models || []).length) {
+    $("generate").disabled = true;
+    $("jobMeta").textContent = data.models_hint
+      || "No video models available.";
   } else {
     $("generate").disabled = false;
-    if (state.model === "live" && keys.pexels && !keys.pexels.set) {
-      $("jobMeta").textContent = "Add a Pexels key in Settings before generating live b-roll.";
-    }
   }
 }
 
@@ -1250,6 +1275,54 @@ function setVisuals(kind, lines) {
 function visualsValue(kind) {
   const el = visualsEl(kind);
   return el ? el.value : "";
+}
+
+function clearShotPlan() {
+  state.shots = [];
+  state.characters = [];
+  const wrap = $("shotPlanField");
+  const box = $("shotPlan");
+  if (wrap) wrap.hidden = true;
+  if (box) box.innerHTML = "";
+}
+
+function setShotPlan(shots, characters) {
+  state.shots = Array.isArray(shots) ? shots : [];
+  state.characters = Array.isArray(characters) ? characters : [];
+  const wrap = $("shotPlanField");
+  const box = $("shotPlan");
+  if (!wrap || !box) return;
+  if (!state.shots.length) {
+    clearShotPlan();
+    return;
+  }
+  wrap.hidden = false;
+  box.innerHTML = state.shots.map((shot, i) => {
+    const n = shot.shot_number || (i + 1);
+    const dur = shot.duration != null ? shot.duration : 5;
+    const action = escapeHtml(shot.action || "");
+    const camera = escapeHtml(shot.camera || "");
+    const prompt = escapeHtml(shot.visual_prompt || "");
+    return (
+      '<article class="shot-card">' +
+        '<header class="shot-card-head">' +
+          '<strong>Shot ' + n + '</strong>' +
+          '<span>' + dur + 's</span>' +
+        '</header>' +
+        '<p class="shot-meta"><span>Action</span> ' + action + '</p>' +
+        '<p class="shot-meta"><span>Camera</span> ' + camera + '</p>' +
+        '<p class="shot-prompt">' + prompt + '</p>' +
+      '</article>'
+    );
+  }).join("");
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function syncStoryMeta(kind) {
@@ -1332,11 +1405,26 @@ async function expandStory(kind) {
     area.value = body.text || "";
     if (body.title) title.value = body.title;
     if (body.setting) setting.value = body.setting;
-    if (body.visuals && body.visuals.length) setVisuals(kind, body.visuals);
+    if (body.visuals && body.visuals.length) {
+      setVisuals(kind, body.visuals);
+    } else {
+      const box = visualsEl(kind);
+      if (box) box.value = "";
+      await syncStoryMeta(kind);
+    }
+    if (!images) {
+      if (body.shots && body.shots.length) {
+        setShotPlan(body.shots, body.characters || []);
+      } else {
+        clearShotPlan();
+      }
+    }
     meta.classList.remove("bad");
     meta.textContent = images
       ? "Visual beats and search keys ready. Edit if you want, then generate stills."
-      : "Story drafted. Title, setting, and visual keys filled — edit if you want, then generate.";
+      : (body.shots && body.shots.length
+        ? "Story + " + body.shots.length + " shot plan ready. Edit if you want, then generate."
+        : "Story drafted. Title, setting, and visual keys filled — edit if you want, then generate.");
   } catch (err) {
     if (String(err.message) === "auth") return;
     meta.classList.add("bad");
@@ -1388,6 +1476,8 @@ async function generate() {
       title: $("title").value.trim(),
       setting: $("setting").value.trim(),
       visuals: visualsValue("video"),
+      shots: state.shots || [],
+      characters: state.characters || [],
     }),
   });
     const body = await res.json().catch(() => ({}));
