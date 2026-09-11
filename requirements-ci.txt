@@ -1,0 +1,12 @@
+# CI-only dependencies for unit tests / lint.
+# Full local render stack (Coqui TTS, Whisper) stays in requirements.txt —
+# those packages are heavy and break on modern pip/setuptools in Actions.
+requests==2.32.3
+Pillow==10.4.0
+python-dotenv==1.0.1
+fastapi==0.115.6
+uvicorn==0.32.1
+pydantic==2.10.4
+python-multipart==0.0.20
+itsdangerous==2.2.0
+cryptography==43.0.3

@@ -1112,6 +1112,7 @@ def api_images_generate(request: Request, body: ImageBody):
         title = effective_title(prompt, body.title)
         setting = effective_setting(prompt, body.setting)
         visuals = _visual_list(body.visuals) or derive_visuals(prompt, setting)
+        stem = _slug(title, "jugaad_{0}".format(job_id))
         folder = config.AI_IMAGE_DIR / stem
         video = config.OUTPUT_DIR / (stem + ".mp4")
         if folder.exists() or video.exists():
